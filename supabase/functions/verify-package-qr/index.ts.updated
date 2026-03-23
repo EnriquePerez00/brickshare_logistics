@@ -1,0 +1,407 @@
+// ============================================================
+// verify-package-qr — VERSIÓN MEJORADA CON AUDITORÍA
+//
+// Cambios principales:
+// 1. Registra TODOS los eventos en tabla package_events
+// 2. Registra errores en tabla scan_errors
+// 3. Implementa webhook de notificación a Brickshare
+// 4. Incluye información de IP y User-Agent
+// ============================================================
+
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { verify } from 'https://deno.land/x/djwt@v3.0.2/mod.ts'
+
+const SUPABASE_URL           = Deno.env.get('SUPABASE_URL')!
+const SUPABASE_ANON_KEY      = Deno.env.get('SUPABASE_ANON_KEY')!
+const SUPABASE_SERVICE_ROLE  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const JWT_SECRET             = Deno.env.get('QR_JWT_SECRET')!
+const BRICKSHARE_WEBHOOK_URL = Deno.env.get('BRICKSHARE_WEBHOOK_URL')
+const BRICKSHARE_WEBHOOK_SECRET = Deno.env.get('BRICKSHARE_WEBHOOK_SECRET')
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // Capturar información del request para auditoría
+    const clientIp = req.headers.get('x-forwarded-for') || 
+                     req.headers.get('cf-connecting-ip') || 
+                     'unknown'
+    const userAgent = req.headers.get('user-agent') || 'unknown'
+
+    // 1. Autenticar al owner
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      return errorResponse(401, 'Missing Authorization header')
+    }
+
+    const supabaseOwner = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    })
+
+    const { data: { user: ownerUser }, error: authErr } = await supabaseOwner.auth.getUser()
+    if (authErr || !ownerUser) return errorResponse(401, 'Invalid or expired session')
+
+    // Verificar que el usuario tiene rol 'owner'
+    const { data: ownerProfile } = await supabaseOwner
+      .from('users')
+      .select('role')
+      .eq('id', ownerUser.id)
+      .single()
+
+    if (!ownerProfile || ownerProfile.role !== 'owner') {
+      return errorResponse(403, 'Only owners can verify package QR codes')
+    }
+
+    // 2. Leer el QR del body
+    const body = await req.json().catch(() => ({}))
+    const qrHash: string = body?.qr_hash
+
+    if (!qrHash || typeof qrHash !== 'string') {
+      return errorResponse(400, 'qr_hash is required')
+    }
+
+    // 3. Verificar la firma y expiración del JWT
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign', 'verify'],
+    )
+
+    let payload: Record<string, unknown>
+    let verificationError: string | null = null
+    let errorType = 'invalid_jwt'
+    
+    try {
+      payload = await verify(qrHash, key) as Record<string, unknown>
+    } catch (err: any) {
+      verificationError = err.message
+      
+      // Distinguir entre tipos de error
+      if (err.message?.includes('Expired')) {
+        errorType = 'expired_qr'
+      } else if (err.message?.includes('signature')) {
+        errorType = 'invalid_signature'
+      }
+      
+      // Registrar error de verificación en tabla scan_errors
+      const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
+      await supabaseAdmin.rpc('log_scan_error', {
+        p_scanned_data: qrHash.substring(0, 100),
+        p_error_type: errorType,
+        p_error_message: verificationError,
+        p_ip_address: clientIp,
+        p_user_agent: userAgent,
+        p_metadata: {
+          owner_id: ownerUser.id,
+          source: 'qr_verification_failed'
+        }
+      }).catch(e => console.error('Error logging scan error:', e))
+      
+      return errorResponse(401, 'QR code is invalid or has expired')
+    }
+
+    const packageId  = payload.package_id as string
+    const locationId = payload.location_id as string
+    const qrType     = (payload.type as string) || 'delivery'
+    const externalShipmentId = payload.external_shipment_id as string | undefined
+    const sourceSystem = (payload.source_system as string) || 'logistics'
+
+    if (!packageId || !locationId) {
+      return errorResponse(400, 'Malformed QR payload')
+    }
+
+    // 4. Admin client para leer sin restricciones de RLS
+    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
+
+    // Verificar que el paquete existe
+    const { data: pkg, error: pkgErr } = await supabaseAdmin
+      .from('packages')
+      .select('id, type, status, tracking_code, location_id, external_shipment_id, source_system, static_qr_hash')
+      .eq('id', packageId)
+      .single()
+
+    if (pkgErr || !pkg) {
+      // Registrar paquete no encontrado
+      await supabaseAdmin.rpc('log_scan_error', {
+        p_scanned_data: qrHash.substring(0, 100),
+        p_error_type: 'package_not_found',
+        p_error_message: 'Package ID from QR does not exist',
+        p_location_id: locationId,
+        p_performed_by: ownerUser.id,
+        p_ip_address: clientIp,
+        p_user_agent: userAgent
+      }).catch(e => console.error('Error logging scan error:', e))
+      
+      return errorResponse(404, 'Package not found')
+    }
+
+    // Validar transiciones de estado según tipo
+    if (qrType === 'delivery' || pkg.type === 'delivery') {
+      if (pkg.status === 'picked_up') {
+        // Registrar intento duplicado
+        await supabaseAdmin.rpc('log_package_event', {
+          p_package_id: packageId,
+          p_event_type: 'qr_scanned_failed',
+          p_performed_by: ownerUser.id,
+          p_location_id: locationId,
+          p_old_status: 'picked_up',
+          p_new_status: 'picked_up',
+          p_qr_type: 'dynamic',
+          p_error_code: 'ALREADY_PICKED_UP',
+          p_error_message: 'Package has already been picked up',
+          p_ip_address: clientIp,
+          p_user_agent: userAgent
+        }).catch(e => console.error('Error logging event:', e))
+        
+        return errorResponse(409, 'Package has already been picked up')
+      }
+      if (pkg.status !== 'in_location') {
+        return errorResponse(409, `Package cannot be picked up. Status: ${pkg.status}`)
+      }
+    } else if (qrType === 'return' || pkg.type === 'return') {
+      if (pkg.status === 'in_location') {
+        return errorResponse(409, 'Return package already received at location')
+      }
+      if (pkg.status === 'returned') {
+        return errorResponse(409, 'Return package already completed')
+      }
+      if (pkg.status !== 'pending_dropoff') {
+        return errorResponse(409, `Return package cannot be received. Status: ${pkg.status}`)
+      }
+    } else {
+      return errorResponse(400, `Unknown package type: ${pkg.type}`)
+    }
+
+    // 5. Verificar que el local del QR pertenece al owner
+    const { data: location, error: locErr } = await supabaseAdmin
+      .from('locations')
+      .select('id, owner_id, name')
+      .eq('id', locationId)
+      .single()
+
+    if (locErr || !location) {
+      return errorResponse(404, 'Location not found')
+    }
+
+    if (location.owner_id !== ownerUser.id) {
+      // Registro de intento no autorizado
+      await supabaseAdmin.rpc('log_scan_error', {
+        p_scanned_data: qrHash.substring(0, 100),
+        p_error_type: 'permission_denied',
+        p_error_message: 'Owner does not own this location',
+        p_location_id: locationId,
+        p_performed_by: ownerUser.id,
+        p_ip_address: clientIp,
+        p_user_agent: userAgent
+      }).catch(e => console.error('Error logging scan error:', e))
+      
+      return errorResponse(403, 'This package does not belong to your location')
+    }
+
+    if (pkg.location_id !== locationId) {
+      return errorResponse(403, 'QR location mismatch')
+    }
+
+    // 6. Actualizar estado según el tipo de package
+    const timestamp = new Date().toISOString()
+    let newStatus: string
+    let eventType: string
+
+    if (pkg.type === 'delivery') {
+      newStatus = 'picked_up'
+      eventType = 'delivery_completed'
+      
+      const { error: updateErr } = await supabaseAdmin
+        .from('packages')
+        .update({
+          status:          newStatus,
+          dynamic_qr_hash: null,
+          qr_expires_at:   null,
+          updated_at:      timestamp,
+        })
+        .eq('id', packageId)
+
+      if (updateErr) {
+        console.error('DB update error:', updateErr)
+        return errorResponse(500, 'Failed to update package status')
+      }
+      
+      // Registrar evento exitoso
+      await supabaseAdmin.rpc('log_package_event', {
+        p_package_id: packageId,
+        p_event_type: 'qr_scanned_success',
+        p_performed_by: ownerUser.id,
+        p_location_id: locationId,
+        p_old_status: 'in_location',
+        p_new_status: 'picked_up',
+        p_qr_type: 'dynamic',
+        p_ip_address: clientIp,
+        p_user_agent: userAgent,
+        p_metadata: {
+          source: 'qr_scan',
+          event_type: eventType
+        }
+      }).catch(e => console.error('Error logging event:', e))
+      
+    } else if (pkg.type === 'return') {
+      newStatus = 'in_location'
+      eventType = 'return_received'
+      
+      const { error: updateErr } = await supabaseAdmin
+        .from('packages')
+        .update({
+          status:         newStatus,
+          static_qr_hash: null,
+          updated_at:     timestamp,
+        })
+        .eq('id', packageId)
+
+      if (updateErr) {
+        console.error('DB update error:', updateErr)
+        return errorResponse(500, 'Failed to update package status')
+      }
+      
+      // Registrar evento exitoso
+      await supabaseAdmin.rpc('log_package_event', {
+        p_package_id: packageId,
+        p_event_type: 'qr_scanned_success',
+        p_performed_by: ownerUser.id,
+        p_location_id: locationId,
+        p_old_status: 'pending_dropoff',
+        p_new_status: 'in_location',
+        p_qr_type: 'static',
+        p_ip_address: clientIp,
+        p_user_agent: userAgent,
+        p_metadata: {
+          source: 'qr_scan',
+          event_type: eventType
+        }
+      }).catch(e => console.error('Error logging event:', e))
+    } else {
+      return errorResponse(400, 'Invalid package type')
+    }
+
+    // 7. Notificar a Brickshare si es necesario
+    if (pkg.source_system === 'brickshare' && pkg.external_shipment_id && BRICKSHARE_WEBHOOK_URL) {
+      notifyBrickshareAsync(
+        packageId,
+        pkg.external_shipment_id,
+        newStatus,
+        eventType,
+        location.name,
+        timestamp
+      ).catch(err => console.error('Webhook notification error:', err))
+    }
+
+    // 8. Respuesta exitosa
+    return new Response(
+      JSON.stringify({
+        success:       true,
+        package_id:    packageId,
+        package_type:  pkg.type,
+        tracking_code: pkg.tracking_code,
+        location_name: location.name,
+        event_type:    eventType,
+        new_status:    newStatus,
+        timestamp:     timestamp,
+        external_shipment_id: pkg.external_shipment_id,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
+  } catch (err) {
+    console.error('Unexpected error:', err)
+    return errorResponse(500, 'Internal server error')
+  }
+})
+
+/**
+ * Notificar a Brickshare sobre cambio de estado (asíncrono con reintentos)
+ */
+async function notifyBrickshareAsync(
+  packageId: string,
+  externalShipmentId: string,
+  newStatus: string,
+  eventType: string,
+  locationName: string,
+  timestamp: string
+) {
+  const webhookPayload = {
+    event_type: eventType,
+    package_id: packageId,
+    external_shipment_id: externalShipmentId,
+    new_status: newStatus,
+    timestamp: timestamp,
+    location: {
+      name: locationName
+    }
+  }
+
+  // Intentar enviar webhook con reintentos exponenciales
+  let retries = 0
+  const maxRetries = 3
+  let backoffMs = 1000
+
+  while (retries < maxRetries) {
+    try {
+      const response = await fetch(Deno.env.get('BRICKSHARE_WEBHOOK_URL')!, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Secret': Deno.env.get('BRICKSHARE_WEBHOOK_SECRET') || '',
+          'X-Timestamp': new Date().toISOString()
+        },
+        body: JSON.stringify(webhookPayload)
+      })
+
+      if (response.ok) {
+        console.log(`Webhook sent successfully to Brickshare: ${externalShipmentId}`)
+        return
+      }
+
+      if (response.status >= 500 || response.status === 429) {
+        // Retry en caso de error de servidor o rate limit
+        throw new Error(`Server error: ${response.status}`)
+      }
+
+      // No reintentar en caso de error 4xx
+      console.error(`Webhook failed with client error: ${response.status}`)
+      return
+
+    } catch (err) {
+      retries++
+      if (retries >= maxRetries) {
+        // Registrar fallo definitivo para manual investigation
+        console.error(`Webhook failed after ${maxRetries} retries:`, err)
+        // TODO: Guardar en dead-letter queue para reprocessing manual
+        return
+      }
+
+      // Esperar antes de reintentar
+      await new Promise(resolve => setTimeout(resolve, backoffMs))
+      backoffMs *= 2 // Exponential backoff
+    }
+  }
+}
+
+function errorResponse(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    },
+  )
+}
