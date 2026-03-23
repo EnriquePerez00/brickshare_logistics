@@ -1,0 +1,36 @@
+# Virtual environments
+.venv/
+
+# Turbo
+.turbo/
+
+# Build outputs
+dist/
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# Env files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Expo
+.expo/
+android/
+ios/
+
+# Supabase
+supabase/.temp/

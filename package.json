@@ -1,0 +1,29 @@
+{
+  "name": "brickshare-logistics",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Plataforma de gestión de paquetería para puntos de conveniencia",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "packageManager": "npm@11.5.1",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "clean": "turbo run clean",
+    "db:push": "supabase db push",
+    "db:watch": "npx nodemon --watch supabase/migrations --ext sql --exec \"npm run db:push\""
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4",
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
