@@ -1,33 +1,85 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "PudoBrickshare",
+    "slug": "pudo-brickshare",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "scheme": "pudobrickshare",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#09090b"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.brickshare.pudo",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "La cámara es necesaria para escanear códigos de barras y códigos QR de paquetes.",
+        "NSMicrophoneUsageDescription": "Se solicita acceso al micrófono para la funcionalidad de la cámara.",
+        "NSLocationWhenInUseUsageDescription": "La ubicación es necesaria para validar las operaciones de entrega en el punto PUDO.",
+        "NSBluetoothAlwaysUsageDescription": "Se necesita Bluetooth para conectar con la impresora térmica de recibos.",
+        "NSBluetoothPeripheralUsageDescription": "Se necesita Bluetooth para conectar con la impresora térmica de recibos."
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.brickshare.pudo",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
     },
     "plugins": [
-      "expo-barcode-scanner"
-    ]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "La cámara es necesaria para escanear códigos de barras y códigos QR de paquetes."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "La ubicación es necesaria para validar las operaciones de entrega en el punto PUDO."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Acceso a la galería para cargar imágenes de códigos de barras/QR en modo desarrollo."
+        }
+      ],
+      "expo-document-picker"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "YOUR_EAS_PROJECT_ID"
+      }
+    },
+    "owner": "brickshare"
   }
 }

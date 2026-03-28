@@ -18,8 +18,8 @@ Returns a JSON array on success (`200 OK`).
 
 ```typescript
 type LocationResponse = {
-  id: string;             // UUID of the location
-  code: string;           // Assigned 5-digit code (calculated from ID)
+  pudo_id: string;        // Sequential PUDO identifier (e.g., "brickshare-001") - Primary identifier
+  code: string;           // Assigned 5-digit code (calculated from internal ID)
   name: string;           // Internal name or owner name
   location_name: string;  // Public name of the establishment
   address: string;        // Physical address
@@ -34,7 +34,7 @@ type LocationResponse = {
 ```json
 [
   {
-    "id": "e2baeb8e-a2b1-4ce8-b64d-df7b78ca60e8",
+    "pudo_id": "brickshare-001",
     "code": "48192",
     "name": "Paco Pil",
     "location_name": "Kiosko Central",
@@ -44,7 +44,7 @@ type LocationResponse = {
     "is_active": true
   },
   {
-    "id": "7fa1831d-b5b6-4b82-95df-3d6110f0f4a8",
+    "pudo_id": "brickshare-002",
     "code": "19542",
     "name": "Ana García",
     "location_name": "Papelería Ana",

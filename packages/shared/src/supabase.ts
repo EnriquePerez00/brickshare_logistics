@@ -9,7 +9,19 @@ const supabaseAnonKey =
   ''
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('[Supabase] Missing environment variables. Check your .env.local')
+  console.warn('[Supabase] Missing environment variables')
+  console.warn('[Supabase] URL:', supabaseUrl ? 'present' : 'MISSING')
+  console.warn('[Supabase] Key:', supabaseAnonKey ? 'present' : 'MISSING')
 }
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey)
+let supabase: any = null
+
+try {
+  supabase = createClient<Database>(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder-key')
+} catch (err) {
+  console.error('[Supabase] Error creating client:', err)
+  // Crear un cliente dummy para evitar que la app crashee
+  supabase = {}
+}
+
+export { supabase }
