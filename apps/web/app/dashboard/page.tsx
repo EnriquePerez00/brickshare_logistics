@@ -9,13 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ProfitabilityChart } from '@/components/ProfitabilityChart'
 import { ProfileTab } from '@/components/ProfileTab'
 import { Button } from '@/components/ui/button'
-
-// Datos Mockeados
-const MOCK_PACKAGES = [
-  { id: 'PKG-001', tracking: 'ES982349823', status: 'in_location', date: 'Hace 2 horas' },
-  { id: 'PKG-002', tracking: 'ES112233445', status: 'in_location', date: 'Hace 5 horas' },
-  { id: 'PKG-003', tracking: 'ES998877665', status: 'pending_dropoff', date: 'Ayer' },
-]
+import PudoActivePackagesTable from '@/components/pudo/PudoActivePackagesTable'
+import PudoOperationsHistory from '@/components/pudo/PudoOperationsHistory'
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -111,6 +106,7 @@ export default function DashboardPage() {
           <TabsList className="bg-white dark:bg-zinc-800 border">
             <TabsTrigger value="overview">Resumen</TabsTrigger>
             <TabsTrigger value="packages">Paquetes Activos</TabsTrigger>
+            <TabsTrigger value="history">Historial</TabsTrigger>
             <TabsTrigger value="profile">Perfil</TabsTrigger>
           </TabsList>
           
@@ -155,16 +151,8 @@ export default function DashboardPage() {
                   <CardDescription>Actividad reciente en tu local.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-8">
-                    {MOCK_PACKAGES.map(pkg => (
-                      <div key={pkg.id} className="flex items-center">
-                        <div className="ml-4 space-y-1">
-                          <p className="text-sm font-medium leading-none">{pkg.tracking}</p>
-                          <p className="text-sm text-muted-foreground">{pkg.status.replace('_', ' ')}</p>
-                        </div>
-                        <div className="ml-auto font-medium text-xs text-zinc-400">{pkg.date}</div>
-                      </div>
-                    ))}
+                  <div className="text-sm text-muted-foreground">
+                    Ver detalles completos en la pestaña "Paquetes Activos" e "Historial"
                   </div>
                 </CardContent>
               </Card>
@@ -172,36 +160,11 @@ export default function DashboardPage() {
           </TabsContent>
           
           <TabsContent value="packages" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Inventario Físico</CardTitle>
-                <CardDescription>Paquetes que actualmente están en tu local (in_location)</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Tracking Code</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead className="text-right">Tiempo en local</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {MOCK_PACKAGES.filter(p => p.status === 'in_location').map(pkg => (
-                      <TableRow key={pkg.id}>
-                        <TableCell className="font-medium">{pkg.tracking}</TableCell>
-                        <TableCell>
-                          <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-blue-100 text-blue-800">
-                            {pkg.status}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-right">{pkg.date}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+            <PudoActivePackagesTable locationId={impersonateId || user?.id} />
+          </TabsContent>
+
+          <TabsContent value="history" className="space-y-4">
+            <PudoOperationsHistory locationId={impersonateId || user?.id} />
           </TabsContent>
 
           <TabsContent value="profile" className="space-y-4">

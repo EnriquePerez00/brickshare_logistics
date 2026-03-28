@@ -47,7 +47,7 @@ export async function GET(
         status,
         location_id,
         locations (
-          id,
+          pudo_id,
           name,
           address,
           city,
@@ -74,31 +74,32 @@ export async function GET(
     }
 
     // 3. Construir respuesta
+    const pkgData = pkg as any
     const response = {
       success: true,
       package: {
-        id: pkg.id,
-        tracking_code: pkg.tracking_code,
-        type: pkg.type,
-        status: pkg.status,
-        location: pkg.locations ? {
-          id: pkg.locations.id,
-          name: pkg.locations.name,
-          address: pkg.locations.address,
-          city: pkg.locations.city,
-          postal_code: pkg.locations.postal_code
+        id: pkgData.id,
+        tracking_code: pkgData.tracking_code,
+        type: pkgData.type,
+        status: pkgData.status,
+        location: pkgData.locations ? {
+          pudo_id: pkgData.locations.pudo_id,
+          name: pkgData.locations.name,
+          address: pkgData.locations.address,
+          city: pkgData.locations.city,
+          postal_code: pkgData.locations.postal_code
         } : null,
-        has_dynamic_qr: !!pkg.dynamic_qr_hash,
-        has_static_qr: !!pkg.static_qr_hash,
-        qr_expires_at: pkg.qr_expires_at,
-        external_shipment_id: pkg.external_shipment_id,
-        source_system: pkg.source_system,
-        created_at: pkg.created_at,
-        updated_at: pkg.updated_at
+        has_dynamic_qr: !!pkgData.dynamic_qr_hash,
+        has_static_qr: !!pkgData.static_qr_hash,
+        qr_expires_at: pkgData.qr_expires_at,
+        external_shipment_id: pkgData.external_shipment_id,
+        source_system: pkgData.source_system,
+        created_at: pkgData.created_at,
+        updated_at: pkgData.updated_at
       }
     }
 
-    console.log('[API Packages By Shipment] Package found with status:', pkg.status)
+    console.log('[API Packages By Shipment] Package found with status:', pkgData.status)
     return NextResponse.json(response, { headers: corsHeaders })
 
   } catch (error) {

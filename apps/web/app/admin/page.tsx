@@ -47,22 +47,35 @@ export default function AdminPage() {
 
       // Parallel data fetch
       const [ownersRes, locationsRes, packagesRes] = await Promise.all([
-        supabase.from('users').select(`
-          id, first_name, last_name, email, created_at,
-          locations(id, location_name, name, city, is_active)
-        `).eq('role', 'usuarios').order('created_at', { ascending: false }),
-        supabase.from('locations').select('id, is_active, commission_rate').eq('is_active', true),
+        supabase.from('users').select('id, first_name, last_name, email, created_at').eq('role', 'usuarios').order('created_at', { ascending: false }),
+        supabase.from('locations').select('id, owner_id, location_name, name, address, postal_code, city, is_active, commission_rate'),
         supabase.from('packages').select('id, status, location:locations(commission_rate)'),
       ])
 
       const pkgs = (packagesRes.data || []) as any[]
-      const activeLocations = (locationsRes.data || []) as any[]
+      const allLocations = (locationsRes.data || []) as any[]
       const ownerList = (ownersRes.data || []) as any[]
+      
+      // Create a map of owner_id to location for faster lookup
+      const locationMap = new Map()
+      allLocations.forEach((loc: any) => {
+        if (loc.owner_id && !locationMap.has(loc.owner_id)) {
+          locationMap.set(loc.owner_id, loc)
+        }
+      })
+      
+      // Enrich owners with their location data
+      const enrichedOwners = ownerList.map((owner: any) => ({
+        ...owner,
+        location: locationMap.get(owner.id)
+      }))
+
+      const activeLocations = allLocations.filter((loc: any) => loc.is_active)
 
       const pickedUpPkgs = pkgs.filter(p => p.status === 'picked_up')
       const totalRevenue = pickedUpPkgs.reduce((sum: number, p: any) => sum + (p.location?.commission_rate || 0.35), 0)
 
-      setOwners(ownerList)
+      setOwners(enrichedOwners)
       setKpis({
         totalPackages: pkgs.length,
         inLocation: pkgs.filter(p => p.status === 'in_location').length,
@@ -186,7 +199,7 @@ export default function AdminPage() {
                       </TableRow>
                     ) : (
                       owners.map(owner => {
-                        const loc = (owner.locations as any[])?.[0]
+                        const loc = owner.location
                         return (
                           <TableRow key={owner.id} className="border-zinc-100 hover:bg-zinc-50/50">
                             <TableCell className="font-medium text-zinc-900">
@@ -196,7 +209,9 @@ export default function AdminPage() {
                             </TableCell>
                             <TableCell className="text-zinc-600">{owner.email}</TableCell>
                             <TableCell className="text-zinc-700 font-semibold">{loc?.location_name || loc?.name || '—'}</TableCell>
-                            <TableCell className="text-zinc-600">{loc?.address || '—'}</TableCell>
+                            <TableCell className="text-zinc-600">
+                              {loc?.address ? `${loc.address}${loc.postal_code ? ` (${loc.postal_code})` : ''}` : '—'}
+                            </TableCell>
                             <TableCell className="text-zinc-600">{loc?.city || '—'}</TableCell>
                             <TableCell className="text-zinc-500 text-sm">
                               {new Date(owner.created_at).toLocaleDateString('es-ES')}

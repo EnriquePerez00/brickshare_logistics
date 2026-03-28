@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { View, Text, ActivityIndicator } from 'react-native';
 import { supabase } from '@brickshare/shared';
 
 import LoginScreen from './src/screens/LoginScreen';
@@ -17,16 +18,65 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    });
+    const initializeAuth = async () => {
+      try {
+        if (!supabase || !supabase.auth) {
+          console.error('[App] Supabase is not initialized correctly');
+          setError('Error initializing app. Check your environment configuration.');
+          setLoading(false);
+          return;
+        }
 
-    supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
+        console.log('[App] Initializing authentication...');
+        
+        const { data, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) {
+          console.error('[App] Session error:', sessionError);
+          setSession(null);
+        } else {
+          console.log('[App] Session loaded:', data?.session ? 'authenticated' : 'not authenticated');
+          setSession(data?.session);
+        }
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+          console.log('[App] Auth state changed:', _event);
+          setSession(session);
+        });
+
+        return () => {
+          subscription?.unsubscribe();
+        };
+      } catch (err) {
+        console.error('[App] Error initializing auth:', err);
+        setError('Error initializing authentication');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeAuth();
   }, []);
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#09090b' }}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={{ color: '#fafafa', marginTop: 20 }}>Cargando...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#09090b' }}>
+        <Text style={{ color: '#ef4444', fontSize: 16 }}>{error}</Text>
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>

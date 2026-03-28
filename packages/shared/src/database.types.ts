@@ -46,6 +46,7 @@ export type Database = {
           city: string | null
           commission_rate: number
           is_active: boolean
+          pudo_id: string
           created_at: string
         }
         Insert: {
@@ -58,6 +59,7 @@ export type Database = {
           city?: string | null
           commission_rate?: number
           is_active?: boolean
+          pudo_id?: string
           created_at?: string
         }
         Update: {
@@ -70,6 +72,7 @@ export type Database = {
           city?: string | null
           commission_rate?: number
           is_active?: boolean
+          pudo_id?: string
           created_at?: string
         }
       }

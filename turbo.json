@@ -5,7 +5,8 @@
     "NEXT_PUBLIC_SUPABASE_URL",
     "NEXT_PUBLIC_SUPABASE_ANON_KEY",
     "EXPO_PUBLIC_SUPABASE_URL",
-    "EXPO_PUBLIC_SUPABASE_ANON_KEY"
+    "EXPO_PUBLIC_SUPABASE_ANON_KEY",
+    "APP_ENV"
   ],
   "tasks": {
     "build": {
@@ -20,8 +21,15 @@
     "lint": {
       "dependsOn": ["^lint"]
     },
+    "type-check": {
+      "dependsOn": ["^build"]
+    },
     "clean": {
       "cache": false
+    },
+    "prebuild": {
+      "cache": false,
+      "dependsOn": ["^build"]
     }
   }
 }
