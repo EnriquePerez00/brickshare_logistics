@@ -47,15 +47,28 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────
     // 1. AUTENTICACIÓN DEL OPERADOR PUDO
     // ─────────────────────────────────────────────────
+    // En Edge Functions, la autenticación viene del Authorization header de la request del cliente
+    // El cliente mobile envía este header automáticamente vía supabase.functions.invoke()
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) return errorResponse(401, 'Missing Authorization header')
+    if (!authHeader) {
+      console.error('[process-pudo-scan] No Authorization header found. Headers:', Array.from(req.headers.entries()))
+      return errorResponse(401, 'Missing Authorization header')
+    }
+
+    console.log('[process-pudo-scan] Auth header received (truncated):', authHeader.substring(0, 50) + '...')
 
     const supabaseLocal = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     })
 
     const { data: { user: ownerUser }, error: authErr } = await supabaseLocal.auth.getUser()
-    if (authErr || !ownerUser) return errorResponse(401, 'Invalid or expired session')
+    if (authErr) {
+      console.error('[process-pudo-scan] Auth error:', authErr)
+      return errorResponse(401, `Invalid or expired session: ${authErr.message}`)
+    }
+    if (!ownerUser) return errorResponse(401, 'Invalid or expired session: no user found')
+
+    console.log('[process-pudo-scan] Authenticated user:', ownerUser.id)
 
     // Verificar rol owner
     const { data: ownerProfile } = await supabaseLocal
