@@ -133,7 +133,7 @@ serve(async (req: Request) => {
       console.log('[LOCATION] ⚠️ DEV MODE: Loading any available location from Cloud')
       const { data: locations, error: locErr } = await cloudSupabase
         .from('locations')
-        .select('id, name, pudo_id, address, owner_id')
+        .select('id, name, pudo_id, address')
         .limit(1)
       
       if (locErr || !locations || locations.length === 0) {
@@ -143,17 +143,32 @@ serve(async (req: Request) => {
       ownerLocation = locations[0]
       console.log('[LOCATION] ✓ Dev location loaded:', ownerLocation.name)
     } else {
-      const { data: location, error: locErr } = await cloudSupabase
-        .from('locations')
-        .select('id, name, pudo_id, address, owner_id')
-        .eq('owner_id', ownerUser.id)
+      // Usar nueva arquitectura user_locations (many-to-many)
+      const { data: userLocationData, error: locErr } = await cloudSupabase
+        .from('user_locations')
+        .select(`
+          location_id,
+          locations (
+            id,
+            name,
+            pudo_id,
+            address
+          )
+        `)
+        .eq('user_id', ownerUser.id)
+        .limit(1)
         .single()
 
-      if (locErr || !location) {
-        return errorResponse(404, 'PUDO location not found for this user')
+      if (locErr || !userLocationData || !userLocationData.locations) {
+        console.error('[LOCATION] ❌ No location assigned to user:', ownerUser.id)
+        return errorResponse(404, 'Only PUDO operators (usuarios/admin) can process scans')
       }
 
-      ownerLocation = location
+      // Extraer location del JOIN
+      ownerLocation = Array.isArray(userLocationData.locations) 
+        ? userLocationData.locations[0] 
+        : userLocationData.locations
+        
       console.log('[LOCATION] ✓ Location found:', ownerLocation.name)
     }
 
@@ -356,9 +371,6 @@ serve(async (req: Request) => {
         source_system: 'brickshare',
         external_shipment_id: shipment.id,
         received_at: now,
-        remote_shipping_status: 'delivered_pudo',
-        remote_customer_name: shipment.user_id || null,
-        remote_delivery_address: shipment.shipping_address || null,
         remote_shipment_data: shipment,
       })
       .select()
@@ -417,8 +429,6 @@ serve(async (req: Request) => {
         api_response_code: 200,
         api_response_message: 'Shipment successfully delivered to PUDO',
         api_request_duration_ms: duration,
-        device_info: 'Mobile App',
-        app_version: '1.0.0',
         metadata: {
           scanned_code,
           shipment_id: shipment.id,
@@ -426,6 +436,8 @@ serve(async (req: Request) => {
           package_id: newPackage?.id,
           local_db_updated: true,
           cloud_db_updated: !!newPackage,
+          device_info: 'Mobile App',
+          app_version: '1.0.0',
         },
       })
       console.log('[CLOUD] ✓ Scan log created')

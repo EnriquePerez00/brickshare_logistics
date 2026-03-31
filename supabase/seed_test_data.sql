@@ -36,15 +36,15 @@ BEGIN
   RAISE NOTICE 'Using user "paco pil": %', v_owner_id;
   
   -- 2. Buscar o crear location
-  SELECT id INTO v_location_id
-  FROM public.locations
-  WHERE owner_id = v_owner_id
+  SELECT l.id INTO v_location_id
+  FROM public.locations l
+  JOIN public.user_locations ul ON ul.location_id = l.id
+  WHERE ul.user_id = v_owner_id
   LIMIT 1;
   
   IF v_location_id IS NULL THEN
     -- Si no existe, crear una nueva
     INSERT INTO public.locations (
-      owner_id,
       name,
       address,
       commission_rate,
@@ -54,7 +54,6 @@ BEGIN
       gps_validation_radius_meters
     )
     VALUES (
-      v_owner_id,
       'PUDO Test Center - Madrid Centro',
       'Calle Gran Vía 45, 28013 Madrid',
       0.35,
@@ -65,7 +64,11 @@ BEGIN
     )
     RETURNING id INTO v_location_id;
     
-    RAISE NOTICE 'Location created: %', v_location_id;
+    -- Vincular usuario a la nueva localización
+    INSERT INTO public.user_locations (user_id, location_id)
+    VALUES (v_owner_id, v_location_id);
+    
+    RAISE NOTICE 'Location created and linked: %', v_location_id;
   ELSE
     RAISE NOTICE 'Using existing location: %', v_location_id;
   END IF;
@@ -132,12 +135,11 @@ BEGIN
         scan_longitude,
         gps_accuracy_meters,
         gps_validation_passed,
-        device_info,
-        app_version,
         api_request_successful,
         api_response_code,
         api_response_message,
         api_request_duration_ms,
+        metadata,
         created_at
       )
       VALUES (
@@ -152,12 +154,11 @@ BEGIN
         -3.7038 + (random() * 0.001 - 0.0005),
         (5 + random() * 15)::NUMERIC(8,2),
         true,
-        'iOS 17.1 / iPhone 14 Pro',
-        '1.0.0',
         true,
         200,
         'Package delivered to PUDO',
         (150 + floor(random() * 200))::INTEGER,
+        jsonb_build_object('device_info', 'iOS 17.1 / iPhone 14 Pro', 'app_version', '1.0.0'),
         v_scan_date
       );
     END IF;
@@ -178,12 +179,11 @@ BEGIN
         scan_longitude,
         gps_accuracy_meters,
         gps_validation_passed,
-        device_info,
-        app_version,
         api_request_successful,
         api_response_code,
         api_response_message,
         api_request_duration_ms,
+        metadata,
         created_at
       )
       VALUES (
@@ -198,12 +198,11 @@ BEGIN
         -3.7038 + (random() * 0.001 - 0.0005),
         (5 + random() * 15)::NUMERIC(8,2),
         true,
-        'iOS 17.1 / iPhone 14 Pro',
-        '1.0.0',
         true,
         200,
         'Package picked up from PUDO',
         (150 + floor(random() * 200))::INTEGER,
+        jsonb_build_object('device_info', 'iOS 17.1 / iPhone 14 Pro', 'app_version', '1.0.0'),
         v_scan_date
       );
     END IF;

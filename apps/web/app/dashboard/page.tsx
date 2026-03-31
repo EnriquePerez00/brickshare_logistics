@@ -1,18 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ProfitabilityChart } from '@/components/ProfitabilityChart'
 import { ProfileTab } from '@/components/ProfileTab'
 import { Button } from '@/components/ui/button'
 import PudoActivePackagesTable from '@/components/pudo/PudoActivePackagesTable'
 import PudoOperationsHistory from '@/components/pudo/PudoOperationsHistory'
 
-export default function DashboardPage() {
+export const dynamic = 'force-dynamic'
+
+function DashboardContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const impersonateId = searchParams.get('impersonate')
@@ -58,7 +59,7 @@ export default function DashboardPage() {
           .select('location_id')
           .eq('user_id', impersonateId)
           .limit(1)
-          .single()
+          .single() as any
         setLocationId(userLocation?.location_id || null)
       } else if (adminChecked && !impersonateId) {
         // Redirigir al panel global si es admin y no está suplantando
@@ -74,7 +75,7 @@ export default function DashboardPage() {
           .select('location_id')
           .eq('user_id', session.user.id)
           .limit(1)
-          .single()
+          .single() as any
         setLocationId(userLocation?.location_id || null)
       }
 
@@ -207,5 +208,13 @@ export default function DashboardPage() {
 
       </div>
     </div>
+  )
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div className="p-8">Cargando...</div>}>
+      <DashboardContent />
+    </Suspense>
   )
 }

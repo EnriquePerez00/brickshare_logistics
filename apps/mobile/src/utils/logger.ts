@@ -1,17 +1,12 @@
-import { Platform } from 'react-native';
-
-// Allow __DEV__ to be overridden in tests
-declare global {
-  var __DEV__: boolean | undefined;
-}
+declare const global: any;
 
 let isDev = (process?.env?.NODE_ENV ?? 'production') === 'development';
 
-if (typeof globalThis !== 'undefined' && globalThis.__DEV__ !== undefined) {
-  isDev = globalThis.__DEV__;
+if (typeof global !== 'undefined' && global.__DEV__ !== undefined) {
+  isDev = global.__DEV__;
 }
 
-const __DEV__ = isDev;
+const IS_DEV = isDev;
 
 type LogLevel = 'info' | 'error' | 'success' | 'debug' | 'warn';
 
@@ -91,7 +86,7 @@ class Logger {
   }
 
   debug(message: string, data?: any, context?: string): void {
-    if (__DEV__) {
+    if (IS_DEV) {
       this.addLog('debug', message, data, context);
       console.log(this.formatOutput('debug', message, data));
     }

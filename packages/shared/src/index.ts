@@ -2,7 +2,7 @@
 // Tipos de Base de Datos (espejo del schema de Supabase)
 // ============================================================
 
-export type UserRole = 'admin' | 'owner' | 'customer'
+export type UserRole = 'admin' | 'user'
 
 export type PackageStatus =
   | 'pending_dropoff'
@@ -15,32 +15,47 @@ export interface User {
   role: UserRole
   first_name: string
   last_name: string
-  email: string
-  phone: string
+  email: string | null
+  phone: string | null
   created_at: string
 }
 
 export interface Location {
   id: string
-  owner_id: string
   name: string
-  location_name?: string
   address: string
-  postal_code?: string
-  city?: string
+  postal_code?: string | null
+  city?: string | null
   commission_rate: number // EUR por paquete, ej: 0.35
   is_active: boolean
+  pudo_id: string
+  latitude?: number | null
+  longitude?: number | null
+  gps_validation_radius_meters?: number | null
+  created_at: string
+}
+
+export interface UserLocation {
+  user_id: string
+  location_id: string
   created_at: string
 }
 
 export interface Package {
   id: string
   tracking_code: string
+  type: 'delivery' | 'return'
   status: PackageStatus
   location_id: string
   customer_id: string | null
   dynamic_qr_hash: string | null
+  static_qr_hash: string | null
   qr_expires_at: string | null // ISO timestamp
+  external_shipment_id: string | null
+  source_system: string | null
+  received_at: string | null
+  picked_up_at: string | null
+  remote_shipment_data: any | null
   created_at: string
   updated_at: string
 }
@@ -72,10 +87,11 @@ export interface MonthlyStats {
   pickups: number
   profitability: number // EUR
   location_id: string
-  location_name: string
+  name: string
 }
 
 // ============================================================
 // Re-exports
 // ============================================================
 export * from './supabase'
+export * from './database.types'

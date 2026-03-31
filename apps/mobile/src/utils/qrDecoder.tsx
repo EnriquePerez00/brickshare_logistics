@@ -15,7 +15,7 @@
  *   // Render <QRDecoderView /> somewhere (hidden but with dimensions)
  *   // const result = await decodeQR(imageUri);
  */
-import React, { useRef, useCallback, useState } from "react";
+import { useRef, useCallback, useState } from "react";
 import { View, StyleSheet, Platform } from "react-native";
 import { WebView } from "react-native-webview";
 import * as FileSystem from "expo-file-system";

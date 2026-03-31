@@ -28,7 +28,7 @@ export async function GET(req: Request) {
   try {
     const { data: locations, error } = await supabase
       .from('locations')
-      .select('id, pudo_id, name, location_name, address, postal_code, city, is_active')
+      .select('id, name, address, postal_code, city, is_active, commission_rate')
       .eq('is_active', true)
     
     if (error) {
@@ -40,11 +40,9 @@ export async function GET(req: Request) {
     }
 
     // Cast data as any[] to prevent TS 'never' inferences for string picks
-    const locationsWithCode = (locations as any[]).map(loc => ({
-      pudo_id: loc.pudo_id,
+      const locationsWithCode = (locations as any[]).map(loc => ({
       code: generateCodeFromId(loc.id),
       name: loc.name,
-      location_name: loc.location_name,
       address: loc.address,
       postal_code: loc.postal_code,
       city: loc.city,

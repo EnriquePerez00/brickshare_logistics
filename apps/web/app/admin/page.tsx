@@ -48,7 +48,7 @@ export default function AdminPage() {
       // Parallel data fetch
       const [usersRes, locationsRes, packagesRes, userLocationsRes] = await Promise.all([
         supabase.from('users').select('id, first_name, last_name, email, created_at').eq('role', 'user').order('created_at', { ascending: false }),
-        supabase.from('locations').select('id, location_name, name, address, postal_code, city, is_active, commission_rate'),
+        supabase.from('locations').select('id, name, address, postal_code, city, is_active, commission_rate'),
         supabase.from('packages').select('id, status, location:locations(commission_rate)'),
         supabase.from('user_locations').select('user_id, location_id'),
       ])
@@ -213,7 +213,7 @@ export default function AdminPage() {
                                 : <span className="italic text-zinc-400">Sin nombre</span>}
                             </TableCell>
                             <TableCell className="text-zinc-600">{owner.email}</TableCell>
-                            <TableCell className="text-zinc-700 font-semibold">{loc?.location_name || loc?.name || '—'}</TableCell>
+                            <TableCell className="text-zinc-700 font-semibold">{loc?.name || '—'}</TableCell>
                             <TableCell className="text-zinc-600">
                               {loc?.address ? `${loc.address}${loc.postal_code ? ` (${loc.postal_code})` : ''}` : '—'}
                             </TableCell>

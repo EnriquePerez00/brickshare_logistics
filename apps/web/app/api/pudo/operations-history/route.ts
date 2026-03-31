@@ -27,14 +27,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   
-  // Llamar a la función RPC
-  const { data, error } = await supabase.rpc('get_pudo_operations_paginated', {
+  // Llamar a la función RPC con tipos dinámicos para evitar errores de inferencia
+  const { data, error } = await (supabase.rpc as any)('get_pudo_operations_paginated', {
     p_location_id: locationId,
     p_date_from: dateFrom ? new Date(dateFrom).toISOString() : null,
     p_date_to: dateTo ? new Date(dateTo).toISOString() : null,
-    p_action_type: actionType,
-    p_result_filter: resultFilter,
-    p_tracking_search: trackingSearch,
+    p_action_type: actionType || null,
+    p_result_filter: resultFilter || null,
+    p_tracking_search: trackingSearch || null,
     p_page: page,
     p_limit: limit
   });

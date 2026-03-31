@@ -47,7 +47,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
         .select('location_id')
         .eq('user_id', targetId)
         .limit(1)
-        .single()
+        .single() as any
       
       let locationData = null
       if (userLocationData?.location_id) {
@@ -55,17 +55,15 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
           .from('locations')
           .select('*')
           .eq('id', userLocationData.location_id)
-          .single()
+          .single() as any
         locationData = data
       }
       
       if (locationData) {
         setLocation(locationData)
       } else {
-        // Inicializar objeto de local vacío
         setLocation({
           name: '',
-          location_name: '',
           address: '',
           postal_code: '',
           city: '',
@@ -118,15 +116,12 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
       location.address || 
       location.postal_code || 
       location.city || 
-      location.location_name
+      location.name
     )
 
     if (hasAnyLocationData) {
-      const defaultName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() || 'Sin Nombre'
-      
       const payload = {
-        name: location.name || defaultName,
-        location_name: location.location_name || '',
+        name: location.name || '',
         address: location.address || '',
         postal_code: location.postal_code || '',
         city: location.city || '',
@@ -137,9 +132,8 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
       
       if (location.id) {
         // Update existente
-        const { error: locError } = await (supabase
-          .from('locations')
-          .update(payload as any)
+        const { error: locError } = await ((supabase.from('locations') as any)
+          .update(payload)
           .eq('id', location.id))
         
         if (locError) {
@@ -148,9 +142,8 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
         }
       } else {
         // Insert nuevo
-        const { data: newLoc, error: locError } = await (supabase
-          .from('locations')
-          .insert(payload as any)
+        const { data: newLoc, error: locError } = await ((supabase.from('locations') as any)
+          .insert(payload)
           .select()
           .single())
         
@@ -161,8 +154,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
           setLocation(newLoc)
           
           // Create user_location entry
-          const { error: userLocError } = await supabase
-            .from('user_locations')
+          const { error: userLocError } = await (supabase.from('user_locations') as any)
             .insert({ user_id: targetId, location_id: newLoc.id })
           
           if (userLocError) {
@@ -288,11 +280,11 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
               <div className="space-y-2">
                 <Label htmlFor="location_name">Nombre del Establecimiento</Label>
                 <Input 
-                  id="location_name" 
+                  id="name" 
                   placeholder="Ej: Tienda Brickshare Centro"
                   className="font-semibold text-lg bg-white"
-                  value={location?.location_name || ''} 
-                  onChange={e => setLocation({...location, location_name: e.target.value})}
+                  value={location?.name || ''} 
+                  onChange={e => setLocation({...location, name: e.target.value})}
                 />
               </div>
               <div className="space-y-2">
