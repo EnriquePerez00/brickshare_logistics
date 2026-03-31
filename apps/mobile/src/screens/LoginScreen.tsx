@@ -16,24 +16,19 @@ export default function LoginScreen() {
   const signInWithEmail = async () => {
     setLoading(true);
     try {
-      logger.info('🔐 [LoginScreen] Attempting authentication with Remote DB (DB2)', 
-        { email: email.toLowerCase() }, 'LoginScreen');
-      
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.toLowerCase(),
         password: password,
       });
 
       if (error) {
-        logger.error('❌ [LoginScreen] Authentication failed', error, 'LoginScreen');
+        logger.error('❌ [LoginScreen] Auth failed', { message: error.message }, 'LoginScreen');
         Alert.alert('Error de Autenticación', error.message);
       } else {
-        logger.success('✅ [LoginScreen] Authenticated successfully', 
-          { userId: data?.user?.id, email: data?.user?.email }, 'LoginScreen');
         Alert.alert('Éxito', 'Sesión iniciada correctamente');
       }
     } catch (err: any) {
-      logger.error('❌ [LoginScreen] Unexpected error during login', err, 'LoginScreen');
+      logger.error('❌ [LoginScreen] Login error', err, 'LoginScreen');
       Alert.alert('Error', 'Error inesperado durante el login');
     } finally {
       setLoading(false);
@@ -48,17 +43,12 @@ export default function LoginScreen() {
     
     setResetLoading(true);
     try {
-      logger.info('🔐 [LoginScreen] Requesting password reset', 
-        { email: resetEmail.toLowerCase() }, 'LoginScreen');
-      
       const { error } = await supabase.auth.resetPasswordForEmail(resetEmail.toLowerCase());
 
       if (error) {
-        logger.error('❌ [LoginScreen] Password reset failed', error, 'LoginScreen');
+        logger.error('❌ [LoginScreen] Reset failed', { message: error.message }, 'LoginScreen');
         Alert.alert('Error', error.message);
       } else {
-        logger.success('✅ [LoginScreen] Password reset email sent', 
-          { email: resetEmail.toLowerCase() }, 'LoginScreen');
         Alert.alert(
           'Correo Enviado ✅',
           'Hemos enviado un enlace a tu correo para restablecer la contraseña.',
@@ -66,7 +56,7 @@ export default function LoginScreen() {
         );
       }
     } catch (err: any) {
-      logger.error('❌ [LoginScreen] Unexpected error during password reset', err, 'LoginScreen');
+      logger.error('❌ [LoginScreen] Reset error', err, 'LoginScreen');
       Alert.alert('Error', 'Error inesperado');
     } finally {
       setResetLoading(false);

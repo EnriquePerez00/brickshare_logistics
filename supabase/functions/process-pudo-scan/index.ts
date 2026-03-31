@@ -94,7 +94,6 @@ serve(async (req: Request) => {
       ownerUser = {
         id: 'dev-user-id',
         email: 'dev@example.com',
-        role: 'usuarios',
       }
     } else {
       // Decodificar JWT
@@ -126,6 +125,10 @@ serve(async (req: Request) => {
 
     // ─────────────────────────────────────────────────
     // 2. OBTENER UBICACIÓN DEL OPERADOR (Cloud)
+    // 
+    // NOTA: La validación se basa ÚNICAMENTE en user_locations.
+    // El rol del usuario NO importa para procesar escaneos PUDO.
+    // Solo se requiere que el usuario tenga una ubicación asignada en user_locations.
     // ─────────────────────────────────────────────────
     let ownerLocation: any
 
@@ -161,7 +164,7 @@ serve(async (req: Request) => {
 
       if (locErr || !userLocationData || !userLocationData.locations) {
         console.error('[LOCATION] ❌ No location assigned to user:', ownerUser.id)
-        return errorResponse(404, 'Only PUDO operators (usuarios/admin) can process scans')
+        return errorResponse(404, 'No location assigned to this user. Please contact administrator.')
       }
 
       // Extraer location del JOIN
