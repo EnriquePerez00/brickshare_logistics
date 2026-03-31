@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { supabase } from '@brickshare/shared'
+import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,7 @@ export function AdminShipmentsTable() {
   const [filterTo, setFilterTo]             = useState('')
 
   const fetchAll = useCallback(async () => {
+    const supabase = createClient()
     setLoading(true)
 
     // Fetch select options

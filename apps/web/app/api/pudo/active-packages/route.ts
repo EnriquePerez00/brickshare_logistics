@@ -22,22 +22,65 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   
-  // Query usando la vista
+  // Query directa a packages con joins (más confiable que la vista)
   let query = supabase
-    .from('pudo_active_packages_enhanced')
-    .select('*')
-    .eq('location_id', locationId);
+    .from('packages')
+    .select(`
+      id,
+      tracking_code,
+      status,
+      location_id,
+      customer_id,
+      created_at,
+      updated_at,
+      locations (
+        id,
+        name
+      ),
+      users:customer_id (
+        first_name,
+        last_name
+      )
+    `)
+    .eq('location_id', locationId)
+    .eq('status', 'in_location');
   
-  // Ordenamiento
-  const orderColumn = sort === 'time' ? 'hours_in_location' :
-                      sort === 'tracking' ? 'tracking_code' :
-                      'package_type';
-  query = query.order(orderColumn, { ascending: order === 'asc' });
-  
-  const { data, error } = await query;
+  const { data: rawData, error } = await query;
   
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  
+  // Procesar los datos para agregar campos calculados
+  const data = rawData?.map((pkg: any) => {
+    const hoursInLocation = pkg.updated_at 
+      ? (Date.now() - new Date(pkg.updated_at).getTime()) / (1000 * 60 * 60)
+      : 0;
+    
+    return {
+      ...pkg,
+      hours_in_location: hoursInLocation,
+      customer_name: pkg.users 
+        ? `${pkg.users.first_name || ''} ${pkg.users.last_name || ''}`.trim() || 'Desconocido'
+        : 'Desconocido',
+      customer_first_name: pkg.users?.first_name || '',
+      customer_last_name: pkg.users?.last_name || '',
+      package_type: 'delivery', // Por ahora simplificado
+      location_name: pkg.locations?.name || ''
+    };
+  }) || [];
+  
+  // Ordenamiento
+  if (sort === 'time') {
+    data.sort((a: any, b: any) => {
+      const diff = b.hours_in_location - a.hours_in_location;
+      return order === 'asc' ? -diff : diff;
+    });
+  } else if (sort === 'tracking') {
+    data.sort((a: any, b: any) => {
+      const comparison = a.tracking_code.localeCompare(b.tracking_code);
+      return order === 'asc' ? comparison : -comparison;
+    });
   }
   
   // Calcular alertas

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { supabase } from '@brickshare/shared'
+import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -21,8 +21,10 @@ export default function DashboardPage() {
   const [user, setUser] = useState<any>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [targetOwner, setTargetOwner] = useState<any>(null)
+  const [locationId, setLocationId] = useState<string | null>(null)
 
   useEffect(() => {
+    const supabase = createClient()
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
@@ -49,6 +51,15 @@ export default function DashboardPage() {
           .eq('id', impersonateId)
           .single()
         if (ownerProfile) setTargetOwner(ownerProfile)
+        
+        // Fetch location_id for the impersonated user from user_locations
+        const { data: userLocation } = await supabase
+          .from('user_locations')
+          .select('location_id')
+          .eq('user_id', impersonateId)
+          .limit(1)
+          .single()
+        setLocationId(userLocation?.location_id || null)
       } else if (adminChecked && !impersonateId) {
         // Redirigir al panel global si es admin y no está suplantando
         router.push('/admin')
@@ -56,6 +67,15 @@ export default function DashboardPage() {
       } else if (impersonateId && !adminChecked) {
         // If not admin, ignore impersonate parameter by redirecting to clean dashboard
         router.replace('/dashboard')
+      } else {
+        // Regular user: fetch their location_id from user_locations
+        const { data: userLocation } = await supabase
+          .from('user_locations')
+          .select('location_id')
+          .eq('user_id', session.user.id)
+          .limit(1)
+          .single()
+        setLocationId(userLocation?.location_id || null)
       }
 
       setLoading(false)
@@ -64,6 +84,7 @@ export default function DashboardPage() {
   }, [router, impersonateId])
 
   const handleLogout = async () => {
+    const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/auth')
   }
@@ -160,11 +181,23 @@ export default function DashboardPage() {
           </TabsContent>
           
           <TabsContent value="packages" className="space-y-4">
-            <PudoActivePackagesTable locationId={impersonateId || user?.id} />
+            {locationId ? (
+              <PudoActivePackagesTable locationId={locationId} />
+            ) : (
+              <div className="p-8 text-center text-gray-500">
+                No se encontró un local asociado a este usuario.
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="history" className="space-y-4">
-            <PudoOperationsHistory locationId={impersonateId || user?.id} />
+            {locationId ? (
+              <PudoOperationsHistory locationId={locationId} />
+            ) : (
+              <div className="p-8 text-center text-gray-500">
+                No se encontró un local asociado a este usuario.
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="profile" className="space-y-4">

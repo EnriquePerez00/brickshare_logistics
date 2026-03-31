@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, StyleSheet, View, Text, TextInput, TouchableOpacity, SafeAreaView, ActivityIndicator, Modal } from 'react-native';
 import { supabase } from '@brickshare/shared';
+import { logger } from '../utils/logger';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -14,13 +15,29 @@ export default function LoginScreen() {
 
   const signInWithEmail = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password,
-    });
+    try {
+      logger.info('🔐 [LoginScreen] Attempting authentication with Remote DB (DB2)', 
+        { email: email.toLowerCase() }, 'LoginScreen');
+      
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password: password,
+      });
 
-    if (error) Alert.alert('Error', error.message);
-    setLoading(false);
+      if (error) {
+        logger.error('❌ [LoginScreen] Authentication failed', error, 'LoginScreen');
+        Alert.alert('Error de Autenticación', error.message);
+      } else {
+        logger.success('✅ [LoginScreen] Authenticated successfully', 
+          { userId: data?.user?.id, email: data?.user?.email }, 'LoginScreen');
+        Alert.alert('Éxito', 'Sesión iniciada correctamente');
+      }
+    } catch (err: any) {
+      logger.error('❌ [LoginScreen] Unexpected error during login', err, 'LoginScreen');
+      Alert.alert('Error', 'Error inesperado durante el login');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleResetPassword = async () => {
@@ -30,25 +47,38 @@ export default function LoginScreen() {
     }
     
     setResetLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail);
-    setResetLoading(false);
+    try {
+      logger.info('🔐 [LoginScreen] Requesting password reset', 
+        { email: resetEmail.toLowerCase() }, 'LoginScreen');
+      
+      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail.toLowerCase());
 
-    if (error) {
-      Alert.alert('Error', error.message);
-    } else {
-      Alert.alert(
-        'Correo Enviado',
-        'Hemos enviado un enlace a tu correo para restablecer la contraseña.',
-        [{ text: 'OK', onPress: () => setModalVisible(false) }]
-      );
+      if (error) {
+        logger.error('❌ [LoginScreen] Password reset failed', error, 'LoginScreen');
+        Alert.alert('Error', error.message);
+      } else {
+        logger.success('✅ [LoginScreen] Password reset email sent', 
+          { email: resetEmail.toLowerCase() }, 'LoginScreen');
+        Alert.alert(
+          'Correo Enviado ✅',
+          'Hemos enviado un enlace a tu correo para restablecer la contraseña.',
+          [{ text: 'OK', onPress: () => setModalVisible(false) }]
+        );
+      }
+    } catch (err: any) {
+      logger.error('❌ [LoginScreen] Unexpected error during password reset', err, 'LoginScreen');
+      Alert.alert('Error', 'Error inesperado');
+    } finally {
+      setResetLoading(false);
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.card}>
-        <Text style={styles.title}>Brickshare Logistics</Text>
-        <Text style={styles.subtitle}>Terminal de Punto de Conveniencia</Text>
+        <Text style={styles.title}>🚚 Brickshare Logistics</Text>
+        <Text style={styles.subtitle}>Terminal de Punto de Conveniencia (PUDO)</Text>
+        <Text style={styles.statusText}>Conectando con DB remota (Brickshare)...</Text>
 
         <TextInput
           style={styles.input}
@@ -169,7 +199,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#a1a1aa',
     textAlign: 'center',
+    marginBottom: 12,
+  },
+  statusText: {
+    fontSize: 12,
+    color: '#71717a',
+    textAlign: 'center',
     marginBottom: 24,
+    fontStyle: 'italic',
   },
   input: {
     backgroundColor: '#27272a', // zinc-800

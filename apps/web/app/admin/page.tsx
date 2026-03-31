@@ -46,28 +46,33 @@ export default function AdminPage() {
       if (profile?.role !== 'admin') { router.push('/dashboard'); return }
 
       // Parallel data fetch
-      const [ownersRes, locationsRes, packagesRes] = await Promise.all([
-        supabase.from('users').select('id, first_name, last_name, email, created_at').eq('role', 'usuarios').order('created_at', { ascending: false }),
-        supabase.from('locations').select('id, owner_id, location_name, name, address, postal_code, city, is_active, commission_rate'),
+      const [usersRes, locationsRes, packagesRes, userLocationsRes] = await Promise.all([
+        supabase.from('users').select('id, first_name, last_name, email, created_at').eq('role', 'user').order('created_at', { ascending: false }),
+        supabase.from('locations').select('id, location_name, name, address, postal_code, city, is_active, commission_rate'),
         supabase.from('packages').select('id, status, location:locations(commission_rate)'),
+        supabase.from('user_locations').select('user_id, location_id'),
       ])
 
       const pkgs = (packagesRes.data || []) as any[]
       const allLocations = (locationsRes.data || []) as any[]
-      const ownerList = (ownersRes.data || []) as any[]
+      const userList = (usersRes.data || []) as any[]
+      const userLocationLinks = (userLocationsRes.data || []) as any[]
       
-      // Create a map of owner_id to location for faster lookup
+      // Create a map of user_id to location using user_locations
       const locationMap = new Map()
-      allLocations.forEach((loc: any) => {
-        if (loc.owner_id && !locationMap.has(loc.owner_id)) {
-          locationMap.set(loc.owner_id, loc)
+      userLocationLinks.forEach((link: any) => {
+        if (!locationMap.has(link.user_id)) {
+          const location = allLocations.find((loc: any) => loc.id === link.location_id)
+          if (location) {
+            locationMap.set(link.user_id, location)
+          }
         }
       })
       
-      // Enrich owners with their location data
-      const enrichedOwners = ownerList.map((owner: any) => ({
-        ...owner,
-        location: locationMap.get(owner.id)
+      // Enrich users with their location data
+      const enrichedOwners = userList.map((user: any) => ({
+        ...user,
+        location: locationMap.get(user.id)
       }))
 
       const activeLocations = allLocations.filter((loc: any) => loc.is_active)
@@ -81,7 +86,7 @@ export default function AdminPage() {
         inLocation: pkgs.filter(p => p.status === 'in_location').length,
         pickedUp: pickedUpPkgs.length,
         totalLocations: activeLocations.length,
-        totalOwners: ownerList.length,
+        totalOwners: userList.length,
         totalRevenue,
       })
       setLoading(false)

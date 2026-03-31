@@ -3,7 +3,7 @@ import { supabase } from '@brickshare/shared'
 
 export const dynamic = 'force-dynamic'
 
-const SHARED_SECRET = process.env.BRICKSHARE_INTEGRATION_SECRET || 'change-me-in-production'
+const SHARED_SECRET = process.env.SUPABASE_INTEGRATION_SECRET || 'change-me-in-production'
 
 /**
  * API endpoint para consultar el estado de un package por su external_shipment_id
