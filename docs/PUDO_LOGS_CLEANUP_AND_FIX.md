@@ -163,4 +163,3 @@ Deberían ver:
 - Edge Function: `supabase/functions/process-pudo-scan/index.ts`
 - Edge Function: `supabase/functions/update-remote-shipment-status/index.ts`
 - Arquitectura: `docs/PUDO_VALIDATION_ARCHITECTURE.md`
-- Logger: `apps/mobile/src/utils/logger.ts`

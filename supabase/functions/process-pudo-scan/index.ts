@@ -30,13 +30,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 // CONFIGURACIÓN DE BASES DE DATOS
 // ─────────────────────────────────────────────────
 // BD CLOUD (Logistics) - Para auth y logs
-const CLOUD_SUPABASE_URL = Deno.env.get('SUPABASE_bricklogistics_URL')!
-const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
-const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+const CLOUD_SUPABASE_URL = Deno.env.get('bricklogistics_URL')!
+const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
+const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('bricklogistics_SERVICE_ROLE_KEY')!
 
 // BD LOCAL (Brickshare via ngrok) - Para validar y actualizar shipments
-const LOCAL_DB_URL = Deno.env.get('SUPABASE_brickshare_API_URL') || ''
-const LOCAL_DB_KEY = Deno.env.get('SUPABASE_brickshare_SERVICE_ROLE_KEY') || ''
+const LOCAL_DB_URL = Deno.env.get('brickshare_API_URL') || ''
+const LOCAL_DB_KEY = Deno.env.get('brickshare_SERVICE_ROLE_KEY') || ''
 
 console.log('[STARTUP] ===== DUAL DATABASE CONFIGURATION =====')
 console.log('[STARTUP] CLOUD DB (Logistics):', CLOUD_SUPABASE_URL)
@@ -52,10 +52,10 @@ const corsHeaders = {
 function validateEnv() {
   const missing = []
   
-  if (!CLOUD_SUPABASE_URL) missing.push('SUPABASE_bricklogistics_URL')
-  if (!CLOUD_SUPABASE_SERVICE_ROLE) missing.push('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')
-  if (!LOCAL_DB_URL) missing.push('SUPABASE_brickshare_API_URL')
-  if (!LOCAL_DB_KEY) missing.push('SUPABASE_brickshare_SERVICE_ROLE_KEY')
+  if (!CLOUD_SUPABASE_URL) missing.push('bricklogistics_URL')
+  if (!CLOUD_SUPABASE_SERVICE_ROLE) missing.push('bricklogistics_SERVICE_ROLE_KEY')
+  if (!LOCAL_DB_URL) missing.push('brickshare_API_URL')
+  if (!LOCAL_DB_KEY) missing.push('brickshare_SERVICE_ROLE_KEY')
   
   if (missing.length > 0) {
     return { valid: false, message: `Missing configuration: ${missing.join(', ')}` }
