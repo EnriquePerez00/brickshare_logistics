@@ -47,15 +47,28 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────
     // 1. AUTENTICACIÓN DEL OPERADOR PUDO
     // ─────────────────────────────────────────────────
+    // En Edge Functions, la autenticación viene del Authorization header de la request del cliente
+    // El cliente mobile envía este header automáticamente vía supabase.functions.invoke()
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) return errorResponse(401, 'Missing Authorization header')
+    if (!authHeader) {
+      console.error('[process-pudo-scan] No Authorization header found. Headers:', Array.from(req.headers.entries()))
+      return errorResponse(401, 'Missing Authorization header')
+    }
+
+    console.log('[process-pudo-scan] Auth header received (truncated):', authHeader.substring(0, 50) + '...')
 
     const supabaseLocal = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     })
 
     const { data: { user: ownerUser }, error: authErr } = await supabaseLocal.auth.getUser()
-    if (authErr || !ownerUser) return errorResponse(401, 'Invalid or expired session')
+    if (authErr) {
+      console.error('[process-pudo-scan] Auth error:', authErr)
+      return errorResponse(401, `Invalid or expired session: ${authErr.message}`)
+    }
+    if (!ownerUser) return errorResponse(401, 'Invalid or expired session: no user found')
+
+    console.log('[process-pudo-scan] Authenticated user:', ownerUser.id)
 
     // Verificar rol owner
     const { data: ownerProfile } = await supabaseLocal
@@ -64,8 +77,8 @@ serve(async (req: Request) => {
       .eq('id', ownerUser.id)
       .single()
 
-    if (!ownerProfile || ownerProfile.role !== 'owner') {
-      return errorResponse(403, 'Only PUDO operators can process scans')
+    if (!ownerProfile || !['owner', 'admin'].includes(ownerProfile.role)) {
+      return errorResponse(403, 'Only PUDO operators (owner/admin) can process scans')
     }
 
     // Obtener location del owner
@@ -131,38 +144,44 @@ serve(async (req: Request) => {
     // Buscar shipment por tracking_number en BD remota (brickshare)
     // La tabla es `shipments` con columna `tracking_number` y `shipment_status`
     let shipment: any = null
+    let remoteConnectionError: string | null = null
 
-    // Intentar buscar por tracking_number primero
-    const { data: shipmentByTracking, error: errByTracking } = await supabaseRemote
-      .from('shipments')
-      .select('*')
-      .eq('tracking_number', scanned_code)
-      .maybeSingle()
-
-    if (shipmentByTracking) {
-      shipment = shipmentByTracking
-    } else {
-      // Intentar buscar por brickshare_package_id
-      const { data: shipmentByPkgId, error: errByPkgId } = await supabaseRemote
+    try {
+      // Intentar buscar por tracking_number primero
+      const { data: shipmentByTracking, error: errByTracking } = await supabaseRemote
         .from('shipments')
         .select('*')
-        .eq('brickshare_package_id', scanned_code)
+        .eq('tracking_number', scanned_code)
         .maybeSingle()
 
-      if (shipmentByPkgId) {
-        shipment = shipmentByPkgId
+      if (shipmentByTracking) {
+        shipment = shipmentByTracking
       } else {
-        // Último intento: buscar por ID directo (UUID)
-        const { data: shipmentById, error: errById } = await supabaseRemote
+        // Intentar buscar por brickshare_package_id
+        const { data: shipmentByPkgId, error: errByPkgId } = await supabaseRemote
           .from('shipments')
           .select('*')
-          .eq('id', scanned_code)
+          .eq('brickshare_package_id', scanned_code)
           .maybeSingle()
 
-        if (shipmentById) {
-          shipment = shipmentById
+        if (shipmentByPkgId) {
+          shipment = shipmentByPkgId
+        } else {
+          // Último intento: buscar por ID directo (UUID)
+          const { data: shipmentById, error: errById } = await supabaseRemote
+            .from('shipments')
+            .select('*')
+            .eq('id', scanned_code)
+            .maybeSingle()
+
+          if (shipmentById) {
+            shipment = shipmentById
+          }
         }
       }
+    } catch (err: any) {
+      remoteConnectionError = `[process-pudo-scan] Remote DB connection error: ${err.message}`
+      console.error(remoteConnectionError)
     }
 
     // Si no se encontró en remoto, aún así creamos el package local con la info disponible
@@ -170,7 +189,7 @@ serve(async (req: Request) => {
     let remoteShipmentId = shipment?.id || null
     let previousStatus = shipment?.shipment_status || 'unknown'
 
-    console.log(`[process-pudo-scan] Remote shipment found: ${shipmentFound}, ID: ${remoteShipmentId}, Status: ${previousStatus}`)
+    console.log(`[process-pudo-scan] Remote shipment found: ${shipmentFound}, ID: ${remoteShipmentId}, Status: ${previousStatus}, ConnectionError: ${remoteConnectionError ? 'YES' : 'NO'}`)
 
     // ─────────────────────────────────────────────────
     // 5. VERIFICAR QUE NO EXISTE YA EN LOCAL
@@ -227,10 +246,11 @@ serve(async (req: Request) => {
 
     if (insertError) {
       console.error('[process-pudo-scan] Error inserting package:', insertError)
+      console.error('[process-pudo-scan] Full error object:', JSON.stringify(insertError))
       return errorResponse(500, `Error creating package: ${insertError.message}`)
     }
 
-    console.log(`[process-pudo-scan] Package created: ${newPackage.id}`)
+    console.log(`[process-pudo-scan] Package created successfully: ${newPackage.id}`)
 
     // ─────────────────────────────────────────────────
     // 7. REGISTRAR EN pudo_scan_logs
@@ -293,7 +313,7 @@ serve(async (req: Request) => {
         gps_validation_passed: gpsValidationPassed,
         api_request_successful: apiRequestSuccessful,
         api_response_code: apiResponseCode,
-        api_response_message: apiResponseMessage,
+        api_response_message: apiResponseMessage || remoteConnectionError || 'Remote DB connection failed',
         api_request_duration_ms: duration,
         device_info: 'Mobile App',
         app_version: '1.0.0',
@@ -301,12 +321,14 @@ serve(async (req: Request) => {
           scanned_code: scanned_code,
           scan_mode: scan_mode,
           shipment_found_in_remote: shipmentFound,
+          remote_connection_error: remoteConnectionError,
           package_id: newPackage.id,
         },
       })
-      console.log('[process-pudo-scan] Scan log created')
+      console.log('[process-pudo-scan] Scan log created successfully')
     } catch (logErr: any) {
       console.error('[process-pudo-scan] Error logging scan:', logErr)
+      console.error('[process-pudo-scan] Full log error:', JSON.stringify(logErr))
     }
 
     // ─────────────────────────────────────────────────
