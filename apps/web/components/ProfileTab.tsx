@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase } from '@brickshare/shared'
+import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +14,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
   const [location, setLocation] = useState<any>(null)
 
   useEffect(() => {
+    const supabase = createClient()
     const fetchProfile = async () => {
       const { data: { user: authUser } } = await supabase.auth.getUser()
       if (!authUser) return
@@ -36,22 +37,33 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
           last_name: '',
           email: authUser?.email || '',
           phone: '+34 ',
-          role: 'usuarios',
+          role: 'user',
         })
       }
 
-      const { data: locationData } = await supabase
-        .from('locations')
-        .select('*')
-        .eq('owner_id', targetId)
+      // Fetch location from user_locations
+      const { data: userLocationData } = await supabase
+        .from('user_locations')
+        .select('location_id')
+        .eq('user_id', targetId)
+        .limit(1)
         .single()
+      
+      let locationData = null
+      if (userLocationData?.location_id) {
+        const { data } = await supabase
+          .from('locations')
+          .select('*')
+          .eq('id', userLocationData.location_id)
+          .single()
+        locationData = data
+      }
       
       if (locationData) {
         setLocation(locationData)
       } else {
-        // Inicializar objeto de local vacío asociado al usuario
+        // Inicializar objeto de local vacío
         setLocation({
-          owner_id: targetId,
           name: '',
           location_name: '',
           address: '',
@@ -68,6 +80,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
     e.preventDefault()
     setSaving(true)
     
+    const supabase = createClient()
     const { data: { user: authUser } } = await supabase.auth.getUser()
     const targetId = profile?.id || impersonateId || authUser?.id
 
@@ -83,7 +96,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
       first_name: profile?.first_name || '',
       last_name: profile?.last_name || '',
       phone: profile?.phone || '+34 ',
-      role: profile?.role || 'usuarios',
+      role: profile?.role || 'user',
       email: profile?.email || authUser?.email || '',
     }
 
@@ -112,7 +125,6 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
       const defaultName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() || 'Sin Nombre'
       
       const payload = {
-        owner_id: targetId,
         name: location.name || defaultName,
         location_name: location.location_name || '',
         address: location.address || '',
@@ -147,6 +159,15 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
           alert('Error al crear el registro de dirección: ' + locError.message)
         } else if (newLoc) {
           setLocation(newLoc)
+          
+          // Create user_location entry
+          const { error: userLocError } = await supabase
+            .from('user_locations')
+            .insert({ user_id: targetId, location_id: newLoc.id })
+          
+          if (userLocError) {
+            console.error('Error linking user to location:', userLocError)
+          }
         }
       }
     }
@@ -157,7 +178,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
 
   if (loading) return <div className="p-8 text-zinc-500">Cargando perfil...</div>
 
-  const isUsuarioOrAdmin = profile?.role === 'usuarios' || profile?.role === 'admin'
+  const isUserOrAdmin = profile?.role === 'user' || profile?.role === 'admin'
 
   return (
     <div className="space-y-8">
@@ -256,7 +277,7 @@ export function ProfileTab({ impersonateId }: { impersonateId?: string | null })
           </CardContent>
         </Card>
 
-        {isUsuarioOrAdmin && (
+        {isUserOrAdmin && (
           <Card className="border-zinc-200 shadow-sm overflow-hidden bg-zinc-50/50">
             <div className="h-1 bg-zinc-900 w-full" />
             <CardHeader>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@brickshare/shared'
+import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,6 +25,7 @@ export default function AuthPage() {
   const [isForgotOpen, setIsForgotOpen] = useState(false)
 
   useEffect(() => {
+    const supabase = createClient()
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (session) {
@@ -49,6 +50,7 @@ export default function AuthPage() {
     setLoading(true)
     setError(null)
 
+    const supabase = createClient()
     const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -79,6 +81,7 @@ export default function AuthPage() {
     setForgotLoading(true)
     setForgotMsg('')
     
+    const supabase = createClient()
     const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
       redirectTo: `${window.location.origin}/auth/reset`,
     })
@@ -154,12 +157,15 @@ export default function AuthPage() {
           </form>
         </CardContent>
         <CardFooter className="flex flex-col space-y-4 text-sm text-zinc-500 dark:text-zinc-400">
+          <button
+            type="button"
+            onClick={() => setIsForgotOpen(true)}
+            className="hover:underline hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
+          >
+            ¿Has olvidado tu contraseña?
+          </button>
+          
           <Dialog open={isForgotOpen} onOpenChange={setIsForgotOpen}>
-            <DialogTrigger asChild>
-              <button className="hover:underline hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
-                ¿Has olvidado tu contraseña?
-              </button>
-            </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <form onSubmit={handleForgotPassword}>
                 <DialogHeader>

@@ -1,3 +1,6 @@
 {
-  "_comment": "This file exists at the monorepo root for compatibility. The actual Expo config is in apps/mobile/app.json"
+  "_comment": "This file exists at the monorepo root for compatibility. The actual Expo config is in apps/mobile/app.json",
+  "android": {
+    "package": "com.anonymous.bricksharelogistics"
+  }
 }

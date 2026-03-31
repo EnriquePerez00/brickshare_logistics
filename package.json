@@ -14,32 +14,34 @@
     "dev:mobile": "cd apps/mobile && expo start",
     "dev:mobile:ios": "cd apps/mobile && expo run:ios",
     "dev:mobile:android": "cd apps/mobile && expo run:android",
-
     "build": "turbo run build",
     "build:web": "turbo run build --filter=web",
     "build:mobile:ios": "cd apps/mobile && eas build --platform ios --profile preview",
     "build:mobile:android": "cd apps/mobile && eas build --platform android --profile preview",
     "build:mobile:all": "cd apps/mobile && eas build --platform all --profile preview",
-
     "prebuild:mobile": "cd apps/mobile && expo prebuild --clean",
     "prebuild:mobile:ios": "cd apps/mobile && expo prebuild --platform ios --clean",
     "prebuild:mobile:android": "cd apps/mobile && expo prebuild --platform android --clean",
-
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
     "clean": "turbo run clean",
     "clean:all": "rm -rf node_modules apps/*/node_modules packages/*/node_modules",
-
     "db:push": "supabase db push",
     "db:watch": "npx nodemon --watch supabase/migrations --ext sql --exec \"npm run db:push\""
   },
   "devDependencies": {
     "nodemon": "^3.1.4",
     "prettier": "^3.3.3",
+    "react-test-renderer": "^19.2.0",
     "turbo": "^2.3.3",
     "typescript": "^5.5.4"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "expo": "~55.0.9",
+    "react": "19.2.0",
+    "react-native": "0.83.4"
   }
 }

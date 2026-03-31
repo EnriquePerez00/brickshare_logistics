@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { supabase } from '@brickshare/shared'
+import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Search, Package, User, MapPin, Loader2 } from 'lucide-react'
@@ -26,6 +26,7 @@ export function AdminSearchBar() {
   const [searched, setSearched] = useState(false)
 
   const handleSearch = useCallback(async (value: string) => {
+    const supabase = createClient()
     setQuery(value)
     if (value.trim().length < 2) {
       setResults(null)
@@ -57,8 +58,7 @@ export function AdminSearchBar() {
       supabase
         .from('locations')
         .select(`
-          id, name, location_name, address, city, postal_code, is_active,
-          owner:users!locations_owner_id_fkey(first_name, last_name, email)
+          id, name, location_name, address, city, postal_code, is_active
         `)
         .or(`name.ilike.${q},location_name.ilike.${q},address.ilike.${q},city.ilike.${q}`)
         .limit(10),
@@ -146,7 +146,7 @@ export function AdminSearchBar() {
                       <span className="font-medium text-zinc-900">{u.first_name} {u.last_name}</span>
                       <span className="text-zinc-500">{u.email}</span>
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${u.role === 'admin' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'} capitalize`}>
-                        {u.role === 'usuarios' ? 'Punto de entrega' : u.role}
+                        {u.role === 'user' ? 'Usuario' : u.role}
                       </span>
                       <span className="text-zinc-400 ml-auto">Desde {new Date(u.created_at).toLocaleDateString('es-ES')}</span>
                     </div>
@@ -170,7 +170,6 @@ export function AdminSearchBar() {
                     <div key={loc.id} className="py-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
                       <span className="font-medium text-zinc-900">{loc.location_name || loc.name}</span>
                       <span className="text-zinc-500">{loc.address}, {loc.city} {loc.postal_code}</span>
-                      <span className="text-zinc-400">{loc.owner?.email || '—'}</span>
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${loc.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                         {loc.is_active ? 'Activo' : 'Inactivo'}
                       </span>

@@ -13,9 +13,9 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { create, getNumericDate } from 'https://deno.land/x/djwt@v3.0.2/mod.ts'
 
-const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!
-const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
-const JWT_SECRET        = Deno.env.get('QR_JWT_SECRET')!  // Secret específico para QRs
+const SUPABASE_URL      = Deno.env.get('SUPABASE_bricklogistics_URL')!
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
+const JWT_SECRET        = Deno.env.get('QR_JWT_SECRET_bricklogistics')!  // Secret específico para QRs
 const QR_TTL_SECONDS    = 5 * 60  // 5 minutos
 
 const corsHeaders = {
@@ -110,7 +110,7 @@ serve(async (req: Request) => {
     // Usamos admin client para poder actualizar (el customer solo tiene SELECT en su paquete)
     const supabaseAdmin = createClient(
       SUPABASE_URL,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!,
     )
 
     const { error: updateError } = await supabaseAdmin

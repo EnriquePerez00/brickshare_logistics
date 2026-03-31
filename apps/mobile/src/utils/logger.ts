@@ -1,6 +1,17 @@
 import { Platform } from 'react-native';
 
-const __DEV__ = process.env.NODE_ENV === 'development';
+// Allow __DEV__ to be overridden in tests
+declare global {
+  var __DEV__: boolean | undefined;
+}
+
+let isDev = (process?.env?.NODE_ENV ?? 'production') === 'development';
+
+if (typeof globalThis !== 'undefined' && globalThis.__DEV__ !== undefined) {
+  isDev = globalThis.__DEV__;
+}
+
+const __DEV__ = isDev;
 
 type LogLevel = 'info' | 'error' | 'success' | 'debug' | 'warn';
 

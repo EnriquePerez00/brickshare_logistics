@@ -22,11 +22,11 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
-const SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const REMOTE_DB_URL = Deno.env.get('REMOTE_DB_URL')! // URL de la BD remota de Brickshare
-const REMOTE_DB_KEY = Deno.env.get('REMOTE_DB_SERVICE_KEY')! // Service key de BD remota
+const SUPABASE_URL = Deno.env.get('SUPABASE_bricklogistics_URL')!
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
+const SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+const REMOTE_DB_URL = Deno.env.get('SUPABASE_brickshare_API_URL')! // URL de la BD remota de Brickshare
+const REMOTE_DB_KEY = Deno.env.get('SUPABASE_brickshare_SERVICE_ROLE_KEY')! // Service key de BD remota
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -45,15 +45,41 @@ serve(async (req: Request) => {
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) return errorResponse(401, 'Missing Authorization header')
 
-    const supabaseLocal = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    let ownerUser: any = null;
+    let authErrorMsg: string | null = null;
+
+    // A. Intentar validar el token localmente
+    const supabaseLocalAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
-    })
+    });
+    
+    const { data: localAuth, error: localAuthErr } = await supabaseLocalAuth.auth.getUser();
+    
+    if (localAuth?.user) {
+      ownerUser = localAuth.user;
+    } else {
+      // B. Si falla, intentar validar el token contra Producción (Dual DB)
+      const supabaseRemoteAuth = createClient(REMOTE_DB_URL, REMOTE_DB_KEY, {
+        global: { headers: { Authorization: authHeader } }
+      });
+      const { data: remoteAuth, error: remoteAuthErr } = await supabaseRemoteAuth.auth.getUser();
+      
+      if (remoteAuth?.user) {
+        ownerUser = remoteAuth.user;
+      } else {
+        authErrorMsg = remoteAuthErr?.message || localAuthErr?.message || 'Unknown auth error';
+      }
+    }
 
-    const { data: { user: ownerUser }, error: authErr } = await supabaseLocal.auth.getUser()
-    if (authErr || !ownerUser) return errorResponse(401, 'Invalid or expired session')
+    if (!ownerUser) {
+      return errorResponse(401, `Invalid or expired session: ${authErrorMsg}`)
+    }
 
-    // Verificar rol owner
-    const { data: ownerProfile } = await supabaseLocal
+    // Inicializar cliente Admin Remoto para leer usuarios y localizaciones de la BD en la Nube
+    const supabaseRemoteAdmin = createClient(REMOTE_DB_URL, REMOTE_DB_KEY);
+
+    // Verificar rol owner en BD Remota usando Admin
+    const { data: ownerProfile } = await supabaseRemoteAdmin
       .from('users')
       .select('role')
       .eq('id', ownerUser.id)
@@ -63,15 +89,15 @@ serve(async (req: Request) => {
       return errorResponse(403, 'Only PUDO operators can update shipment status')
     }
 
-    // Obtener location del owner
-    const { data: ownerLocation, error: locErr } = await supabaseLocal
+    // Obtener location del owner en BD Remota
+    const { data: ownerLocation, error: locErr } = await supabaseRemoteAdmin
       .from('locations')
       .select('id, name, latitude, longitude, gps_validation_radius_meters')
       .eq('owner_id', ownerUser.id)
       .single()
 
     if (locErr || !ownerLocation) {
-      return errorResponse(404, 'PUDO location not found for this user')
+      return errorResponse(404, 'PUDO location not found for this user in remote database')
     }
 
     // 2. Leer datos del body
@@ -339,8 +365,8 @@ async function logPudoScan(
 ): Promise<void> {
   try {
     const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      Deno.env.get('SUPABASE_bricklogistics_URL')!,
+      Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
     )
 
     await supabaseAdmin.from('pudo_scan_logs').insert({
