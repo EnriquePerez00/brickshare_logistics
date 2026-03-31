@@ -3,48 +3,47 @@ import { supabase, supabaseLocal } from '@brickshare/shared';
 import { logger } from '../utils/logger';
 
 /**
- * Interface para resultado de escaneo en recepción (dropoff)
- * Datos generados por Edge Function en DB1 + Sync remoto de DB2
+ * Interface unificada para resultado de escaneo QR
+ * Soporta recepción (dropoff), entrega (pickup) a cliente y devolución (return)
  */
-export interface PudoScanResult {
-  package?: any;
-  remote_sync?: {
-    api_updated: boolean;
-    previous_status?: string;
-    message?: string;
-    shipment_found?: boolean;
+export interface ScanResult {
+  success: boolean;
+  operation_type: 'dropoff' | 'pickup' | 'return';
+  message: string;
+  package?: {
+    id: string;
+    tracking_code: string;
+    tracking_number: string;
+    status: string;
+    type: 'delivery' | 'return';
+    location: {
+      id: string;
+      name: string;
+      pudo_id: string;
+      address: string;
+    };
+    received_at?: string;
+    picked_up_at?: string;
+    returned_at?: string;
   };
-  shipment_data?: {
-    customer_name?: string;
-    delivery_address?: string;
+  shipment?: {
+    id: string;
+    previous_status: string;
+    new_status: string;
+    updated_at: string;
+    customer_id: string;
+    delivery_address: string;
   };
-  gps_validation?: {
-    passed: boolean;
-    message: string;
+  operator?: {
+    id: string;
+    email: string;
   };
+  timestamp: string;
   duration_ms: number;
 }
 
 /**
- * Interface para resultado de entrega (pickup)
- * Actualización de estado remoto en DB2 vía Edge Function en DB1
- */
-export interface PickupResult {
-  success: boolean;
-  action_type: string;
-  previous_status: string;
-  new_status: string;
-  pudo_location: {
-    name: string;
-  };
-  gps_validation: {
-    passed: boolean;
-    message: string;
-  };
-}
-
-/**
- * Servicio PUDO con patrón Dual Database
+ * Servicio PUDO unificado con patrón Dual Database
  * 
  * Arquitectura:
  * - DB2 (Brickshare): Almacena usuarios, envíos, ubicaciones
@@ -53,35 +52,43 @@ export interface PickupResult {
  * 
  * Flujo:
  * 1. App autentica con DB2 (obtiene JWT)
- * 2. App invoca Edge Function en DB1 con JWT
- * 3. Edge Function valida JWT, procesa, sincroniza con DB2
- * 4. App recibe resultado combinado
+ * 2. App invoca Edge Function en DB1 con JWT y código escaneado
+ * 3. Edge Function:
+ *    - Detecta automáticamente si es dropoff o pickup
+ *    - Valida estado del shipment
+ *    - Actualiza en DB2 con timestamp correspondiente
+ *    - Registra auditoría (pudo_scan_logs)
+ * 4. App recibe resultado con operation_type incluido
  */
 export const pudoService = {
   /**
-   * Procesa la recepción de un paquete (DROPOFF)
+   * Procesa un escaneo QR (DROPOFF, PICKUP o RETURN)
    * 
-   * Flujo:
-   * 1. Valida sesión de DB2 (Brickshare)
-   * 2. Invoca Edge Function en DB1
-   * 3. Edge Function:
-   *    - Crea registro en DB1 (paquete local)
-   *    - Sincroniza con DB2 (actualiza shipment)
-   *    - Registra auditoría (pudo_scan_logs)
-   * 4. Retorna datos combinados
+   * Detecta automáticamente el tipo de operación basándose en:
+   * - Si código está en delivery_qr_code → DROPOFF (recepción en PUDO)
+   * - Si código está en pickup_qr_code → PICKUP (entrega a cliente)
+   * - Si código está en return_qr_code → RETURN (devolución en PUDO)
    * 
-   * @param trackingCode - Código de seguimiento del paquete (ej: "BS-DEL-7A2D335C")
+   * La Edge Function se encarga de:
+   * 1. Buscar código en los tres campos de QR
+   * 2. Determinar tipo de operación automáticamente
+   * 3. Validar estado actual del shipment
+   * 4. Actualizar shipment con timestamp correspondiente
+   * 5. Actualizar user_status a 'received' si es PICKUP
+   * 6. Registrar auditoría completa
+   * 
+   * @param scannedCode - Código QR escaneado (delivery, pickup o return)
    * @param gpsData - Datos GPS validados (lat, lon, accuracy)
-   * @returns Resultado con info de paquete + sincronización remota
+   * @returns Resultado con tipo de operación detectada
    */
-  async processDropoff(
-    trackingCode: string,
+  async processScan(
+    scannedCode: string,
     gpsData?: { latitude: number; longitude: number; accuracy: number } | null
-  ): Promise<PudoScanResult> {
+  ): Promise<ScanResult> {
     const startTime = Date.now();
     
-    logger.info('🚀 [pudoService] DROPOFF: Starting process', 
-      { trackingCode, gps: !!gpsData }, 'pudoService');
+    logger.info('🚀 [pudoService] SCAN: Starting process', 
+      { scannedCode, gps: !!gpsData }, 'pudoService');
 
     try {
       // 1️⃣ Obtener sesión de DB2 (Brickshare remota)
@@ -122,7 +129,7 @@ export const pudoService = {
       // IMPORTANTE: Usar X-Auth-Token en lugar de Authorization para evitar validación de Kong
       logger.debug('📡 [pudoService] Invoking Edge Function process-pudo-scan', 
         { 
-          trackingCode,
+          scannedCode,
           token_preview: session.access_token.substring(0, 30) + '...',
           supabaseLocal_url: (supabaseLocal as any)?.url || 'UNKNOWN',
         }, 'pudoService');
@@ -144,8 +151,7 @@ export const pudoService = {
       const { data, error } = await supabaseLocal.functions.invoke('process-pudo-scan', {
         headers,
         body: {
-          scanned_code: trackingCode,
-          scan_mode: 'dropoff',
+          scanned_code: scannedCode,
           gps_latitude: gpsData?.latitude,
           gps_longitude: gpsData?.longitude,
           gps_accuracy: gpsData?.accuracy,
@@ -188,8 +194,9 @@ export const pudoService = {
       }
 
       const duration = Date.now() - startTime;
-      logger.success('✅ [pudoService] DROPOFF completed successfully', 
-        { trackingCode, duration }, 'pudoService');
+      const operationType = data.operation_type || 'dropoff';
+      logger.success('✅ [pudoService] SCAN completed successfully', 
+        { scannedCode, operationType, duration }, 'pudoService');
 
       return {
         ...data,
@@ -198,113 +205,7 @@ export const pudoService = {
 
     } catch (err: any) {
       const duration = Date.now() - startTime;
-      logger.error('❌ [pudoService] DROPOFF failed', 
-        { error: err?.message, duration }, 'pudoService');
-      throw err;
-    }
-  },
-
-  /**
-   * Procesa la entrega de un paquete (PICKUP)
-   * 
-   * Flujo:
-   * 1. Valida sesión de DB2
-   * 2. Invoca Edge Function en DB1
-   * 3. Edge Function:
-   *    - Valida QR dinámico
-   *    - Actualiza estado en DB2 (shipment)
-   *    - Registra auditoría en DB1
-   * 4. Retorna confirmación de entrega
-   * 
-   * @param qrHash - Hash/data del QR dinámico
-   * @param shipmentId - ID del envío en DB2
-   * @param gpsData - Datos GPS validados
-   * @returns Resultado con confirmación de entrega
-   */
-  async processPickup(
-    qrHash: string,
-    shipmentId: string,
-    gpsData?: { latitude: number; longitude: number; accuracy: number } | null
-  ): Promise<PickupResult> {
-    const startTime = Date.now();
-    
-    logger.info('🚀 [pudoService] PICKUP: Starting process', 
-      { shipmentId, gps: !!gpsData }, 'pudoService');
-
-    try {
-      // 1️⃣ Obtener sesión de DB2
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session || !session.access_token) {
-        logger.error('❌ [pudoService] No active session from DB2', {}, 'pudoService');
-        throw new Error('No hay sesión activa. Por favor, inicia sesión nuevamente.');
-      }
-
-      // 2️⃣ Invocar Edge Function en DB1
-      // IMPORTANTE: Usar X-Auth-Token en lugar de Authorization para evitar validación de Kong
-      logger.debug('📡 [pudoService] Invoking Edge Function update-remote-shipment-status', 
-        { shipmentId }, 'pudoService');
-
-      // Detectar si estamos en modo desarrollo via variable de entorno
-      const isDevMode = process.env.EXPO_PUBLIC_DEV_MODE === 'true';
-      
-      const headers: Record<string, string> = {
-        'X-Auth-Token': `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json',
-      };
-
-      // En desarrollo, bypass JWT validation
-      if (isDevMode) {
-        headers['X-Dev-Bypass'] = 'true';
-        logger.debug('🔧 [pudoService] DEV MODE: Adding X-Dev-Bypass header', {}, 'pudoService');
-      }
-
-      const { data, error } = await supabaseLocal.functions.invoke('update-remote-shipment-status', {
-        headers,
-        body: {
-          shipment_id: shipmentId,
-          qr_data: qrHash,
-          gps_latitude: gpsData?.latitude,
-          gps_longitude: gpsData?.longitude,
-          gps_accuracy: gpsData?.accuracy,
-        },
-      });
-
-      // 3️⃣ Manejar errores
-      if (error) {
-        let detailedError = error.message || 'Error desconocido';
-
-        try {
-          if (error.context && typeof error.context.json === 'function') {
-            const errorBody = await error.context.clone().json();
-            detailedError = errorBody?.error || errorBody?.message || JSON.stringify(errorBody);
-          } else if (error.context && typeof error.context.text === 'function') {
-            detailedError = await error.context.clone().text();
-          }
-        } catch (parseErr) {
-          logger.warn('Error parsing Edge Function error response', {}, 'pudoService');
-        }
-
-        logger.error('❌ [pudoService] Edge Function error (Pickup)', 
-          { detailedError, originalMessage: error.message }, 'pudoService');
-        
-        throw new Error(`Error en entrega: ${detailedError}`);
-      }
-
-      // 4️⃣ Validar respuesta
-      if (!data) {
-        logger.error('❌ [pudoService] Empty response from Edge Function', {}, 'pudoService');
-        throw new Error('Respuesta vacía del servidor');
-      }
-
-      const duration = Date.now() - startTime;
-      logger.success('✅ [pudoService] PICKUP completed successfully', 
-        { shipmentId, duration }, 'pudoService');
-
-      return data;
-
-    } catch (err: any) {
-      const duration = Date.now() - startTime;
-      logger.error('❌ [pudoService] PICKUP failed', 
+      logger.error('❌ [pudoService] SCAN failed', 
         { error: err?.message, duration }, 'pudoService');
       throw err;
     }

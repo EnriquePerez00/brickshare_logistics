@@ -78,27 +78,31 @@ serve(async (req: Request) => {
     // Inicializar cliente Admin Remoto para leer usuarios y localizaciones de la BD en la Nube
     const supabaseRemoteAdmin = createClient(REMOTE_DB_URL, REMOTE_DB_KEY);
 
-    // Verificar rol owner en BD Remota usando Admin
-    const { data: ownerProfile } = await supabaseRemoteAdmin
-      .from('users')
-      .select('role')
-      .eq('id', ownerUser.id)
+    // Obtener ubicación PUDO asignada al usuario usando user_locations
+    const { data: userLocationData, error: locErr } = await supabaseRemoteAdmin
+      .from('user_locations')
+      .select(`
+        location_id,
+        locations (
+          id,
+          name,
+          latitude,
+          longitude,
+          gps_validation_radius_meters
+        )
+      `)
+      .eq('user_id', ownerUser.id)
+      .limit(1)
       .single()
 
-    if (!ownerProfile || ownerProfile.role !== 'user') {
-      return errorResponse(403, 'Only PUDO operators can update shipment status')
+    if (locErr || !userLocationData || !userLocationData.locations) {
+      return errorResponse(404, 'No PUDO location assigned to this user. Please contact administrator.')
     }
 
-    // Obtener location del owner en BD Remota
-    const { data: ownerLocation, error: locErr } = await supabaseRemoteAdmin
-      .from('locations')
-      .select('id, name, latitude, longitude, gps_validation_radius_meters')
-      .eq('owner_id', ownerUser.id)
-      .single()
-
-    if (locErr || !ownerLocation) {
-      return errorResponse(404, 'PUDO location not found for this user in remote database')
-    }
+    // Extraer location del JOIN
+    const ownerLocation = Array.isArray(userLocationData.locations) 
+      ? userLocationData.locations[0] 
+      : userLocationData.locations
 
     // 2. Leer datos del body
     const body = await req.json().catch(() => ({}))

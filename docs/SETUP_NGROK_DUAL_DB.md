@@ -55,23 +55,23 @@ Version                       3.3.5
 Region                        us
 Latency                        -
 Web Interface                 http://127.0.0.1:4040
-Forwarding                    https://1a23-456-789-10.ngrok-free.app -> http://localhost:54331
+Forwarding                    https://semblably-dizzied-bruno.ngrok-free.dev -> http://localhost:54331
 ```
 
-**COPIA LA URL PÚBLICA**: `https://1a23-456-789-10.ngrok-free.app`
+**COPIA LA URL PÚBLICA**: `https://semblably-dizzied-bruno.ngrok-free.dev`
 
 ### PASO 6: Configurar variables de entorno en Supabase Dashboard
 
 1. Ve a: https://supabase.com/dashboard/project/qumjzvhtotcvnzpjgjkl/settings/functions
 2. Haz click en "Environment Variables"
 3. Agrega estas variables:
-   - **Nombre**: `REMOTE_DB_URL`
-   - **Valor**: `https://1a23-456-789-10.ngrok-free.app` (usa tu URL de ngrok)
+   - **Nombre**: `SUPABASE_brickshare_API_URL`
+   - **Valor**: `https://semblably-dizzied-bruno.ngrok-free.dev` (usa tu URL de ngrok actual)
    - Click "Save"
 
 4. Agrega otra:
-   - **Nombre**: `REMOTE_DB_SERVICE_KEY`
-   - **Valor**: `YOUR_REMOTE_DB_SERVICE_KEY_HERE` (obtén este valor de tu proyecto Brickshare local)
+   - **Nombre**: `SUPABASE_brickshare_SERVICE_ROLE_KEY`
+   - **Valor**: `[Tu clave de servicio local de Brickshare]` (obtén este valor de tu proyecto Brickshare local)
    - Click "Save"
 
 ### PASO 7: Reiniciar la Edge Function en Supabase Dashboard
@@ -96,8 +96,8 @@ Desde tu app móvil, intenta escanear un QR. La Edge Function debería poder acc
 [Móvil] 
   ↓ (JWT de DB1)
 [Edge Function en DB1 Cloud]
-  ↓ (intenta usar REMOTE_DB_URL)
-[ngrok tunnel: https://1a23-456-789-10.ngrok-free.app]
+  ↓ (intenta usar SUPABASE_brickshare_API_URL)
+[ngrok tunnel: https://semblably-dizzied-bruno.ngrok-free.dev]
   ↓ (redirige a localhost:54331)
 [DB2 Brickshare Local: http://127.0.0.1:54331]
 ```
@@ -114,13 +114,13 @@ Para verificar que todo funciona:
 
 2. **Verifica que ngrok está redirigiendo:**
    ```bash
-   curl https://1a23-456-789-10.ngrok-free.app/rest/v1/health
+   curl https://semblably-dizzied-bruno.ngrok-free.dev/rest/v1/health
    ```
    Debería retornar lo mismo que arriba
 
 3. **Verifica variables en Supabase:**
    - Dashboard → Settings → Functions → Environment Variables
-   - Confirma que `REMOTE_DB_URL` está configurada
+   - Confirma que `SUPABASE_brickshare_API_URL` y `SUPABASE_brickshare_SERVICE_ROLE_KEY` están configuradas
 
 4. **Prueba con la app móvil:**
    - Intenta escanear un QR en el simulador

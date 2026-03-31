@@ -5,7 +5,7 @@ interface DevImageUploadModalProps {
   visible: boolean;
   onClose: () => void;
   onProcess: (data: string) => void;
-  mode: 'dropoff' | 'pickup';
+  mode?: 'dropoff' | 'pickup';
   pickedImageUri: string | null;
   decoding: boolean;
   decodeStatus: 'idle' | 'success' | 'failed';
@@ -18,7 +18,7 @@ export const DevImageUploadModal: React.FC<DevImageUploadModalProps> = ({
   visible, 
   onClose, 
   onProcess, 
-  mode,
+  mode = 'dropoff',
   pickedImageUri,
   decoding,
   decodeStatus,
@@ -39,7 +39,7 @@ export const DevImageUploadModal: React.FC<DevImageUploadModalProps> = ({
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
         <View style={styles.imageModalContent}>
           <Text style={styles.modalTitle}>
-            🖼️ {mode === 'dropoff' ? 'Imagen de Código de Barras' : 'Imagen de QR'}
+            🖼️ Imagen de Código QR
           </Text>
 
           {/* Vista previa de la imagen */}
@@ -68,7 +68,7 @@ export const DevImageUploadModal: React.FC<DevImageUploadModalProps> = ({
           {!decoding && decodeStatus === 'failed' && (
             <View style={[styles.decodeStatusBar, styles.decodeFailed]}>
               <Text style={styles.decodeFailedText}>
-                ⚠️ No se detectó QR. {mode === 'dropoff' ? 'Introduce el código de barras manualmente:' : 'Introduce el contenido del QR manualmente:'}
+                ⚠️ No se detectó QR. Introduce el código manualmente:
               </Text>
             </View>
           )}
@@ -83,7 +83,7 @@ export const DevImageUploadModal: React.FC<DevImageUploadModalProps> = ({
               setImageCodeInput(text);
               if (decodeStatus === 'success') setDecodeStatus('idle');
             }}
-            placeholder={mode === 'dropoff' ? 'Tracking code (ej: BS-DEL-7A2D335C)...' : 'Contenido del QR...'}
+            placeholder={'Código QR escaneado (ej: BS-DEL-7A2D335C o BS-PU-ABC123DEF)...'}
             placeholderTextColor="#71717a"
             autoCapitalize="none"
             autoCorrect={false}

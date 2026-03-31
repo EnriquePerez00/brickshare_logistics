@@ -30,13 +30,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 // CONFIGURACIÓN DE BASES DE DATOS
 // ─────────────────────────────────────────────────
 // BD CLOUD (Logistics) - Para auth y logs
-const CLOUD_SUPABASE_URL = Deno.env.get('SUPABASE_bricklogistics_URL')!
-const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
-const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+const CLOUD_SUPABASE_URL = Deno.env.get('bricklogistics_URL')!
+const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
+const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('bricklogistics_SERVICE_ROLE_KEY')!
 
 // BD LOCAL (Brickshare via ngrok) - Para validar y actualizar shipments
-const LOCAL_DB_URL = Deno.env.get('SUPABASE_brickshare_API_URL') || ''
-const LOCAL_DB_KEY = Deno.env.get('SUPABASE_brickshare_SERVICE_ROLE_KEY') || ''
+const LOCAL_DB_URL = Deno.env.get('brickshare_API_URL') || ''
+const LOCAL_DB_KEY = Deno.env.get('brickshare_SERVICE_ROLE_KEY') || ''
 
 console.log('[STARTUP] ===== DUAL DATABASE CONFIGURATION =====')
 console.log('[STARTUP] CLOUD DB (Logistics):', CLOUD_SUPABASE_URL)
@@ -52,10 +52,10 @@ const corsHeaders = {
 function validateEnv() {
   const missing = []
   
-  if (!CLOUD_SUPABASE_URL) missing.push('SUPABASE_bricklogistics_URL')
-  if (!CLOUD_SUPABASE_SERVICE_ROLE) missing.push('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')
-  if (!LOCAL_DB_URL) missing.push('SUPABASE_brickshare_API_URL')
-  if (!LOCAL_DB_KEY) missing.push('SUPABASE_brickshare_SERVICE_ROLE_KEY')
+  if (!CLOUD_SUPABASE_URL) missing.push('bricklogistics_URL')
+  if (!CLOUD_SUPABASE_SERVICE_ROLE) missing.push('bricklogistics_SERVICE_ROLE_KEY')
+  if (!LOCAL_DB_URL) missing.push('brickshare_API_URL')
+  if (!LOCAL_DB_KEY) missing.push('brickshare_SERVICE_ROLE_KEY')
   
   if (missing.length > 0) {
     return { valid: false, message: `Missing configuration: ${missing.join(', ')}` }
@@ -94,7 +94,6 @@ serve(async (req: Request) => {
       ownerUser = {
         id: 'dev-user-id',
         email: 'dev@example.com',
-        role: 'usuarios',
       }
     } else {
       // Decodificar JWT
@@ -126,6 +125,10 @@ serve(async (req: Request) => {
 
     // ─────────────────────────────────────────────────
     // 2. OBTENER UBICACIÓN DEL OPERADOR (Cloud)
+    // 
+    // NOTA: La validación se basa ÚNICAMENTE en user_locations.
+    // El rol del usuario NO importa para procesar escaneos PUDO.
+    // Solo se requiere que el usuario tenga una ubicación asignada en user_locations.
     // ─────────────────────────────────────────────────
     let ownerLocation: any
 
@@ -161,7 +164,7 @@ serve(async (req: Request) => {
 
       if (locErr || !userLocationData || !userLocationData.locations) {
         console.error('[LOCATION] ❌ No location assigned to user:', ownerUser.id)
-        return errorResponse(404, 'Only PUDO operators (usuarios/admin) can process scans')
+        return errorResponse(404, 'No location assigned to this user. Please contact administrator.')
       }
 
       // Extraer location del JOIN
@@ -192,13 +195,14 @@ serve(async (req: Request) => {
 
     // ─────────────────────────────────────────────────
     // 4. VALIDAR QR EN BD LOCAL (Brickshare)
+    // Buscar en delivery_qr_code Y pickup_qr_code
     // ─────────────────────────────────────────────────
-    console.log('[VALIDATE] Checking delivery_qr_code in Local DB...')
+    console.log('[VALIDATE] Checking QR codes in Local DB (delivery or pickup)...')
     
     const { data: shipment, error: shipmentErr } = await localSupabase
       .from('shipments')
-      .select('id, delivery_qr_code, shipment_status, tracking_number, user_id, shipping_address, shipping_city')
-      .eq('delivery_qr_code', scanned_code)
+      .select('id, delivery_qr_code, pickup_qr_code, return_qr_code, shipment_status, tracking_number, user_id, shipping_address, shipping_city')
+      .or(`delivery_qr_code.eq.${scanned_code},pickup_qr_code.eq.${scanned_code},return_qr_code.eq.${scanned_code}`)
       .single()
 
     if (shipmentErr || !shipment) {
@@ -233,9 +237,46 @@ serve(async (req: Request) => {
     })
 
     // ─────────────────────────────────────────────────
-    // 5. VALIDAR ESTADO = 'in_transit_pudo'
+    // 5. DETECTAR TIPO DE OPERACIÓN (DROPOFF vs PICKUP vs RETURN)
     // ─────────────────────────────────────────────────
-    if (shipment.shipment_status !== 'in_transit_pudo') {
+    let operationType: 'dropoff' | 'pickup' | 'return'
+    let expectedStatus: string
+    let newStatus: string
+    let timestampField: string
+    let actionType: 'delivery_confirmation' | 'return_confirmation'
+
+    if (shipment.delivery_qr_code === scanned_code) {
+      // CASO 1: Recepción en PUDO
+      operationType = 'dropoff'
+      expectedStatus = 'in_transit_pudo'
+      newStatus = 'delivered_pudo'
+      timestampField = 'delivery_validated_at'
+      actionType = 'delivery_confirmation'
+      console.log('[VALIDATE] ✓ Operation: DROPOFF (delivery_qr_code matched)')
+    } else if (shipment.pickup_qr_code === scanned_code) {
+      // CASO 2: Entrega a cliente
+      operationType = 'pickup'
+      expectedStatus = 'delivered_pudo'
+      newStatus = 'delivered_user'
+      timestampField = 'pickup_validated_at'
+      actionType = 'delivery_confirmation'
+      console.log('[VALIDATE] ✓ Operation: PICKUP (pickup_qr_code matched)')
+    } else if (shipment.return_qr_code === scanned_code) {
+      // CASO 3: Devolución en PUDO
+      operationType = 'return'
+      expectedStatus = 'in_return_pudo'
+      newStatus = 'in_return'
+      timestampField = 'return_validated_at'
+      actionType = 'return_confirmation'
+      console.log('[VALIDATE] ✓ Operation: RETURN (return_qr_code matched)')
+    } else {
+      return errorResponse(400, 'QR code no coincide con ninguno de los códigos registrados')
+    }
+
+    // ─────────────────────────────────────────────────
+    // 6. VALIDAR ESTADO ESPERADO
+    // ─────────────────────────────────────────────────
+    if (shipment.shipment_status !== expectedStatus) {
       console.error('[VALIDATE] ❌ Invalid status:', shipment.shipment_status)
       
       // Registrar intento fallido
@@ -245,26 +286,27 @@ serve(async (req: Request) => {
         previous_status: shipment.shipment_status,
         new_status: 'validation_failed',
         scanned_by_user_id: ownerUser.id,
-        action_type: 'delivery_validation',
+        action_type: actionType,
         api_request_successful: false,
         api_response_code: 400,
-        api_response_message: `Invalid status: expected 'in_transit_pudo', got '${shipment.shipment_status}'`,
+        api_response_message: `Invalid status: expected '${expectedStatus}', got '${shipment.shipment_status}'`,
         api_request_duration_ms: Date.now() - startTime,
         metadata: {
           scanned_code,
+          operation_type: operationType,
           error: 'invalid_status',
-          expected: 'in_transit_pudo',
+          expected: expectedStatus,
           actual: shipment.shipment_status,
         },
       })
 
-      return errorResponse(400, `Estado inválido: se esperaba 'in_transit_pudo', pero el paquete está en '${shipment.shipment_status}'`)
+      return errorResponse(400, `Estado inválido: se esperaba '${expectedStatus}', pero el paquete está en '${shipment.shipment_status}'`)
     }
 
-    console.log('[VALIDATE] ✓ Status is correct: in_transit_pudo')
+    console.log(`[VALIDATE] ✓ Status is correct: ${expectedStatus}`)
 
     // ─────────────────────────────────────────────────
-    // 6. ACTUALIZAR SHIPMENT EN BD LOCAL
+    // 7. ACTUALIZAR SHIPMENT EN BD LOCAL CON TIMESTAMP
     // ─────────────────────────────────────────────────
     const now = new Date().toISOString()
     
@@ -272,17 +314,21 @@ serve(async (req: Request) => {
     console.log('[UPDATE] Target:', {
       shipment_id: shipment.id,
       current_status: shipment.shipment_status,
-      new_status: 'delivered_pudo',
+      new_status: newStatus,
+      timestamp_field: timestampField,
+      operation_type: operationType,
       db_url: LOCAL_DB_URL
     })
     
+    const updateData: any = {
+      shipment_status: newStatus,
+      updated_at: now,
+    }
+    updateData[timestampField] = now
+
     const { error: updateErr } = await localSupabase
       .from('shipments')
-      .update({
-        shipment_status: 'delivered_pudo',
-        delivery_validated_at: now,
-        updated_at: now,
-      })
+      .update(updateData)
       .eq('id', shipment.id)
 
     if (updateErr) {
@@ -316,7 +362,7 @@ serve(async (req: Request) => {
     console.log('[UPDATE] Verifying update...')
     const { data: verifiedShipment, error: verifyErr } = await localSupabase
       .from('shipments')
-      .select('shipment_status, delivery_validated_at')
+      .select(`shipment_status, ${timestampField}`)
       .eq('id', shipment.id)
       .single()
 
@@ -327,18 +373,18 @@ serve(async (req: Request) => {
 
     console.log('[UPDATE] ✓ Verification result:', verifiedShipment)
 
-    if (verifiedShipment.shipment_status !== 'delivered_pudo') {
+    if (verifiedShipment.shipment_status !== newStatus) {
       console.error('[UPDATE] ❌ Update verification failed!')
-      console.error('[UPDATE] ❌ Expected: delivered_pudo, Got:', verifiedShipment.shipment_status)
+      console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedShipment.shipment_status)
       
       // Registrar fallo de verificación
       await cloudSupabase.from('pudo_scan_logs').insert({
         pudo_location_id: ownerLocation.id,
         remote_shipment_id: shipment.id,
-        previous_status: 'in_transit_pudo',
+        previous_status: shipment.shipment_status,
         new_status: 'verification_failed',
         scanned_by_user_id: ownerUser.id,
-        action_type: 'delivery_confirmation',
+        action_type: actionType,
         api_request_successful: false,
         api_response_code: 500,
         api_response_message: `Update verification failed: status is ${verifiedShipment.shipment_status}`,
@@ -346,8 +392,9 @@ serve(async (req: Request) => {
         metadata: {
           scanned_code,
           shipment_id: shipment.id,
+          operation_type: operationType,
           error: 'verification_failed',
-          expected_status: 'delivered_pudo',
+          expected_status: newStatus,
           actual_status: verifiedShipment.shipment_status,
         },
       })
@@ -355,22 +402,44 @@ serve(async (req: Request) => {
       return errorResponse(500, 'La actualización del shipment no se pudo verificar')
     }
 
-    console.log('[UPDATE] ✓ Shipment successfully updated and verified to delivered_pudo')
+    console.log(`[UPDATE] ✓ Shipment successfully updated and verified to ${newStatus}`)
 
     // ─────────────────────────────────────────────────
-    // 7. REGISTRAR EN BD CLOUD - packages
+    // 7.5 ACTUALIZAR USER_STATUS EN BD LOCAL (si aplica)
+    // Para operaciones PICKUP, actualizar users.user_status = 'received'
+    // ─────────────────────────────────────────────────
+    if (operationType === 'pickup' && newStatus === 'delivered_user') {
+      console.log('[UPDATE] Updating user status to "received"...')
+      const { error: userUpdateErr } = await localSupabase
+        .from('users')
+        .update({ user_status: 'received' })
+        .eq('id', shipment.user_id)
+
+      if (userUpdateErr) {
+        console.error('[UPDATE] ⚠️ Failed to update user status:', userUpdateErr.message)
+        console.error('[UPDATE] ⚠️ Error details:', userUpdateErr)
+        // No retornamos error, solo registramos la advertencia
+      } else {
+        console.log('[UPDATE] ✓ User status updated to "received"')
+      }
+    }
+
+    // ─────────────────────────────────────────────────
+    // 8. REGISTRAR EN BD CLOUD - packages
     // ─────────────────────────────────────────────────
     console.log('[CLOUD] Creating package record...')
     const { data: newPackage, error: packageErr } = await cloudSupabase
       .from('packages')
       .insert({
         tracking_code: scanned_code,
-        type: 'delivery',
-        status: 'in_location',
+        type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
+        status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
         location_id: ownerLocation.id,
         source_system: 'brickshare',
         external_shipment_id: shipment.id,
-        received_at: now,
+        received_at: operationType === 'dropoff' ? now : undefined,
+        picked_up_at: operationType === 'pickup' ? now : undefined,
+        returned_at: operationType === 'return' ? now : undefined,
         remote_shipment_data: shipment,
       })
       .select()
@@ -384,21 +453,22 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────
-    // 8. REGISTRAR EN BD CLOUD - package_events
+    // 9. REGISTRAR EN BD CLOUD - package_events
     // ─────────────────────────────────────────────────
     if (newPackage) {
       try {
         await cloudSupabase.from('package_events').insert({
           package_id: newPackage.id,
-          event_type: 'dropoff',
-          old_status: null,
-          new_status: 'in_location',
+          event_type: operationType,
+          old_status: shipment.shipment_status,
+          new_status: newStatus,
           performed_by: ownerUser.id,
           location_id: ownerLocation.id,
           metadata: {
             scanned_code,
             shipment_id: shipment.id,
             tracking_number: shipment.tracking_number,
+            operation_type: operationType,
             source: 'pudo_scan',
           },
         })
@@ -409,7 +479,7 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────
-    // 9. REGISTRAR EN BD CLOUD - pudo_scan_logs
+    // 10. REGISTRAR EN BD CLOUD - pudo_scan_logs
     // ─────────────────────────────────────────────────
     const duration = Date.now() - startTime
     
@@ -417,23 +487,24 @@ serve(async (req: Request) => {
       await cloudSupabase.from('pudo_scan_logs').insert({
         pudo_location_id: ownerLocation.id,
         remote_shipment_id: shipment.id,
-        previous_status: 'in_transit_pudo',
-        new_status: 'delivered_pudo',
+        previous_status: shipment.shipment_status,
+        new_status: newStatus,
         scanned_by_user_id: ownerUser.id,
-        action_type: 'delivery_confirmation',
+        action_type: actionType,
         scan_latitude: gps_latitude || null,
         scan_longitude: gps_longitude || null,
         gps_accuracy_meters: gps_accuracy || null,
         gps_validation_passed: true,
         api_request_successful: true,
         api_response_code: 200,
-        api_response_message: 'Shipment successfully delivered to PUDO',
+        api_response_message: `Shipment successfully ${operationType === 'dropoff' ? 'received at PUDO' : 'delivered to customer'}`,
         api_request_duration_ms: duration,
         metadata: {
           scanned_code,
           shipment_id: shipment.id,
           tracking_number: shipment.tracking_number,
           package_id: newPackage?.id,
+          operation_type: operationType,
           local_db_updated: true,
           cloud_db_updated: !!newPackage,
           device_info: 'Mobile App',
@@ -446,30 +517,37 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────
-    // 10. RETORNAR RESPUESTA EXITOSA
+    // 11. RETORNAR RESPUESTA EXITOSA
     // ─────────────────────────────────────────────────
-    return new Response(
+      return new Response(
       JSON.stringify({
         success: true,
-        message: 'Paquete recepcionado exitosamente en PUDO',
+        operation_type: operationType,
+        message: operationType === 'dropoff' 
+          ? 'Paquete recepcionado exitosamente en PUDO'
+          : operationType === 'pickup'
+          ? 'Paquete entregado exitosamente al cliente'
+          : 'Paquete recibido para devolución',
         package: {
           id: newPackage?.id,
           tracking_code: scanned_code,
           tracking_number: shipment.tracking_number,
-          status: 'in_location',
-          type: 'delivery',
+          status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
+          type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
           location: {
             id: ownerLocation.id,
             name: ownerLocation.name,
             pudo_id: ownerLocation.pudo_id,
             address: ownerLocation.address,
           },
-          received_at: now,
+          received_at: operationType === 'dropoff' ? now : undefined,
+          picked_up_at: operationType === 'pickup' ? now : undefined,
+          returned_at: operationType === 'return' ? now : undefined,
         },
         shipment: {
           id: shipment.id,
-          previous_status: 'in_transit_pudo',
-          new_status: 'delivered_pudo',
+          previous_status: shipment.shipment_status,
+          new_status: newStatus,
           updated_at: now,
           customer_id: shipment.user_id,
           delivery_address: shipment.shipping_address,

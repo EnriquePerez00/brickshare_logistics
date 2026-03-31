@@ -127,11 +127,11 @@ QR_JWT_SECRET=production_qr_jwt_secret
 #### 2.3 Deployar la Edge Function
 
 ```bash
-# Deployar localmente
+# Deployar a Cloud
 supabase functions deploy verify-package-qr
 
 # Verificar que funciona
-curl -X POST http://localhost:54321/functions/v1/verify-package-qr \
+curl -X POST https://qumjzvhtotcvnzpjgjkl.supabase.co/functions/v1/verify-package-qr \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"qr_hash": "test_jwt_token"}'
@@ -141,7 +141,7 @@ curl -X POST http://localhost:54321/functions/v1/verify-package-qr \
 
 ```bash
 # Después de escanear un paquete, verificar logs:
-curl -X GET http://localhost:54321/rest/v1/package_events \
+curl -X GET https://qumjzvhtotcvnzpjgjkl.supabase.co/rest/v1/package_events \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json"
 
@@ -405,7 +405,7 @@ const handlePickup = async (qrHash: string) => {
 # 1. Escanear QR inválido en app móvil
 # 2. Revisar tabla scan_errors en BD:
 
-curl -X GET http://localhost:54321/rest/v1/scan_errors \
+curl -X GET https://qumjzvhtotcvnzpjgjkl.supabase.co/rest/v1/scan_errors \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json"
 
@@ -435,8 +435,8 @@ CORREOS_API_USER=your_correos_user
 CORREOS_API_PASSWORD=your_correos_password
 CORREOS_SENDER_CODE=your_sender_code
 
-# Supabase
-SUPABASE_URL=http://127.0.0.1:54321
+# Supabase Cloud
+SUPABASE_URL=https://qumjzvhtotcvnzpjgjkl.supabase.co
 SUPABASE_ANON_KEY=your_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 ```

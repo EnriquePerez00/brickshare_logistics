@@ -121,9 +121,9 @@ ngrok http 54331
 
 ### Paso 2: Verificar Edge Function
 ```bash
-# Debe estar corriendo en DB1 (logistics)
+# Debe estar corriendo en DB1 (logistics - Cloud)
 supabase functions serve
-# Salida: process-pudo-scan available at http://127.0.0.1:54321/functions/v1/process-pudo-scan
+# Salida: process-pudo-scan available at https://qumjzvhtotcvnzpjgjkl.supabase.co/functions/v1/process-pudo-scan
 ```
 
 ### Paso 3: Reiniciar app móvil
@@ -137,10 +137,11 @@ npx expo start --clear
 
 ## 🔍 Verificación
 
-### Test 1: Verificar que app NO usa puerto 54421
+### Test 1: Verificar que app NO usa puerto 54331 (Brickshare local)
 ```bash
 # Buscar referencias en logs de Metro
-# NO debería haber conexiones a :54421
+# Verificar que solo usa Cloud: https://qumjzvhtotcvnzpjgjkl.supabase.co
+# NO debería haber conexiones a localhost:54331 ni 54421
 ```
 
 ### Test 2: Verificar que Edge Function accede a Brickshare

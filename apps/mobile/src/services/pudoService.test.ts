@@ -1,142 +1,177 @@
-import { pudoService, PudoScanResult, PickupResult } from './pudoService';
+import { pudoService, ScanResult } from './pudoService';
 import { supabase, supabaseLocal } from '@brickshare/shared';
-import { logger } from '../utils/logger';
+import { jwtDecode } from 'jwt-decode';
 
-// Mock the modules
-jest.mock('@brickshare/shared');
-jest.mock('../utils/logger');
+// Mock dependencies
+jest.mock('jwt-decode');
+jest.mock('@brickshare/shared', () => ({
+  supabase: {
+    auth: {
+      getSession: jest.fn(),
+    },
+  },
+  supabaseLocal: {
+    functions: {
+      invoke: jest.fn(),
+    },
+  },
+}));
+
+jest.mock('../utils/logger', () => ({
+  logger: {
+    info: jest.fn(),
+    debug: jest.fn(),
+    error: jest.fn(),
+    success: jest.fn(),
+    warn: jest.fn(),
+  },
+}));
 
 describe('pudoService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.useFakeTimers();
   });
 
-  afterEach(() => {
-    jest.runOnlyPendingTimers();
-    jest.useRealTimers();
-  });
-
-  describe('processDropoff', () => {
-    const mockTrackingCode = 'BS-DEL-7A2D335C';
-    const mockGpsData = {
-      latitude: 40.7128,
-      longitude: -74.0060,
-      accuracy: 5,
-    };
-
-    it('should successfully process a dropoff with valid tracking code and GPS', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
+  describe('processScan - DROPOFF (delivery_qr_code)', () => {
+    it('should successfully process a DROPOFF scan', async () => {
+      // Mock session
       (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
-      });
-
-      const mockResponse = {
-        package: { tracking_code: mockTrackingCode, status: 'received' },
-        remote_sync: { api_updated: true, previous_status: 'in_transit' },
-        gps_validation: { passed: true, message: 'GPS valid' },
-      };
-
-      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: mockResponse,
-        error: null,
-      });
-
-      // Execute
-      const result = await pudoService.processDropoff(mockTrackingCode, mockGpsData);
-
-      // Assertions
-      expect(result).toHaveProperty('duration_ms');
-      expect(result.package).toBeDefined();
-      expect(result.remote_sync).toBeDefined();
-      expect(supabase.auth.getSession).toHaveBeenCalled();
-      expect(supabaseLocal.functions.invoke).toHaveBeenCalledWith(
-        'process-pudo-scan',
-        expect.objectContaining({
-          body: {
-            scanned_code: mockTrackingCode,
-            scan_mode: 'dropoff',
-            gps_latitude: mockGpsData.latitude,
-            gps_longitude: mockGpsData.longitude,
-            gps_accuracy: mockGpsData.accuracy,
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
           },
-        })
-      );
-      expect(logger.success).toHaveBeenCalled();
-    });
-
-    it('should throw error if no active session from DB2', async () => {
-      // Setup mocks
-      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: null },
-      });
-
-      // Execute & Assert
-      await expect(pudoService.processDropoff(mockTrackingCode, mockGpsData)).rejects.toThrow(
-        'No hay sesión activa'
-      );
-      expect(logger.error).toHaveBeenCalled();
-    });
-
-    it('should handle Edge Function errors gracefully', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
-      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
-      });
-
-      const mockError = {
-        message: 'Edge Function error',
-        context: {
-          json: jest.fn().mockResolvedValue({
-            error: 'Package not found',
-            status: 'NOT_FOUND',
-          }),
-          clone: jest.fn().mockReturnThis(),
         },
-      };
+      });
 
+      // Mock JWT decode
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
+        role: 'pudo_operator',
+      });
+
+      // Mock Edge Function response - DROPOFF
       (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: null,
-        error: mockError,
+        data: {
+          success: true,
+          operation_type: 'dropoff',
+          message: 'Paquete recepcionado exitosamente en PUDO',
+          package: {
+            id: 'pkg-001',
+            tracking_code: 'BS-DEL-7A2D335C-8FA',
+            tracking_number: 'TRK-001',
+            status: 'in_location',
+            type: 'delivery',
+            location: {
+              id: 'loc-001',
+              name: 'PUDO Centro',
+              pudo_id: 'PUDO-001',
+              address: 'Calle Principal 123',
+            },
+            received_at: '2026-03-31T22:20:00Z',
+          },
+          shipment: {
+            id: 'ship-001',
+            previous_status: 'in_transit_pudo',
+            new_status: 'delivered_pudo',
+            updated_at: '2026-03-31T22:20:00Z',
+            customer_id: 'cust-123',
+            delivery_address: 'Cliente Address 456',
+          },
+          operator: {
+            id: 'user-123',
+            email: 'pudo@example.com',
+          },
+          timestamp: '2026-03-31T22:20:00Z',
+          duration_ms: 234,
+        },
       });
 
-      // Execute & Assert
-      await expect(pudoService.processDropoff(mockTrackingCode, mockGpsData)).rejects.toThrow(
-        'Error procesando escaneo'
-      );
-      expect(logger.error).toHaveBeenCalled();
-    });
-
-    it('should process dropoff without GPS data', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
-      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
+      const result = await pudoService.processScan('BS-DEL-7A2D335C-8FA', {
+        latitude: 40.4168,
+        longitude: -3.7038,
+        accuracy: 10.5,
       });
-
-      const mockResponse = {
-        package: { tracking_code: mockTrackingCode, status: 'received' },
-        gps_validation: { passed: false, message: 'GPS not available' },
-      };
-
-      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: mockResponse,
-        error: null,
-      });
-
-      // Execute
-      const result = await pudoService.processDropoff(mockTrackingCode, null);
 
       // Assertions
       expect(result).toBeDefined();
+      expect(result.operation_type).toBe('dropoff');
+      expect(result.success).toBe(true);
+      expect(result.package?.status).toBe('in_location');
+      expect(result.shipment?.new_status).toBe('delivered_pudo');
+      expect(result.duration_ms).toBeDefined();
+
+      // Verify Edge Function was called correctly
+      expect(supabaseLocal.functions.invoke).toHaveBeenCalledWith('process-pudo-scan', {
+        headers: {
+          'X-Auth-Token': 'Bearer test-token-123',
+          'Content-Type': 'application/json',
+        },
+        body: {
+          scanned_code: 'BS-DEL-7A2D335C-8FA',
+          gps_latitude: 40.4168,
+          gps_longitude: -3.7038,
+          gps_accuracy: 10.5,
+        },
+      });
+    });
+
+    it('should handle DROPOFF without GPS data', async () => {
+      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
+          },
+        },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
+      });
+
+      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
+        data: {
+          success: true,
+          operation_type: 'dropoff',
+          message: 'Paquete recepcionado exitosamente en PUDO',
+          package: {
+            id: 'pkg-001',
+            tracking_code: 'BS-DEL-7A2D335C-8FA',
+            tracking_number: 'TRK-001',
+            status: 'in_location',
+            type: 'delivery',
+            location: {
+              id: 'loc-001',
+              name: 'PUDO Centro',
+              pudo_id: 'PUDO-001',
+              address: 'Calle Principal 123',
+            },
+          },
+          shipment: {
+            id: 'ship-001',
+            previous_status: 'in_transit_pudo',
+            new_status: 'delivered_pudo',
+            updated_at: '2026-03-31T22:20:00Z',
+          },
+          timestamp: '2026-03-31T22:20:00Z',
+          duration_ms: 150,
+        },
+      });
+
+      const result = await pudoService.processScan('BS-DEL-7A2D335C-8FA', null);
+
+      expect(result.operation_type).toBe('dropoff');
+      expect(result.success).toBe(true);
+
+      // Verify GPS data was sent as undefined
       expect(supabaseLocal.functions.invoke).toHaveBeenCalledWith(
         'process-pudo-scan',
         expect.objectContaining({
           body: {
-            scanned_code: mockTrackingCode,
-            scan_mode: 'dropoff',
+            scanned_code: 'BS-DEL-7A2D335C-8FA',
             gps_latitude: undefined,
             gps_longitude: undefined,
             gps_accuracy: undefined,
@@ -144,219 +179,273 @@ describe('pudoService', () => {
         })
       );
     });
+  });
 
-    it('should measure operation duration correctly', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
+  describe('processScan - PICKUP (pickup_qr_code)', () => {
+    it('should successfully process a PICKUP scan', async () => {
       (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
+          },
+        },
       });
 
-      (supabaseLocal.functions.invoke as jest.Mock).mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            setTimeout(
-              () =>
-                resolve({
-                  data: { package: {}, gps_validation: { passed: true, message: 'OK' } },
-                  error: null,
-                }),
-              100
-            );
-          })
-      );
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
+      });
 
-      // Execute
-      const result = await pudoService.processDropoff(mockTrackingCode, mockGpsData);
+      // Mock Edge Function response - PICKUP
+      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
+        data: {
+          success: true,
+          operation_type: 'pickup',
+          message: 'Paquete entregado exitosamente al cliente',
+          package: {
+            id: 'pkg-002',
+            tracking_code: 'BS-PU-ABC123DEF',
+            tracking_number: 'TRK-002',
+            status: 'picked_up',
+            type: 'return',
+            location: {
+              id: 'loc-001',
+              name: 'PUDO Centro',
+              pudo_id: 'PUDO-001',
+              address: 'Calle Principal 123',
+            },
+            picked_up_at: '2026-03-31T22:21:00Z',
+          },
+          shipment: {
+            id: 'ship-002',
+            previous_status: 'delivered_pudo',
+            new_status: 'delivered_user',
+            updated_at: '2026-03-31T22:21:00Z',
+            customer_id: 'cust-124',
+            delivery_address: 'Cliente Address 789',
+          },
+          operator: {
+            id: 'user-123',
+            email: 'pudo@example.com',
+          },
+          timestamp: '2026-03-31T22:21:00Z',
+          duration_ms: 198,
+        },
+      });
+
+      const result = await pudoService.processScan('BS-PU-ABC123DEF', {
+        latitude: 40.4168,
+        longitude: -3.7038,
+        accuracy: 8.3,
+      });
 
       // Assertions
-      expect(result.duration_ms).toBeGreaterThanOrEqual(100);
+      expect(result.operation_type).toBe('pickup');
+      expect(result.success).toBe(true);
+      expect(result.package?.status).toBe('picked_up');
+      expect(result.shipment?.new_status).toBe('delivered_user');
+      expect(result.duration_ms).toBeDefined();
     });
   });
 
-  describe('processPickup', () => {
-    const mockQrHash = 'eyJzaGlwbWVudF9pZCI6IjEyMyJ9';
-    const mockShipmentId = '123';
-    const mockGpsData = {
-      latitude: 40.7128,
-      longitude: -74.0060,
-      accuracy: 5,
-    };
-
-    it('should successfully process a pickup with valid QR and GPS', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
-      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
-      });
-
-      const mockResponse: PickupResult = {
-        success: true,
-        action_type: 'delivery_confirmation',
-        previous_status: 'ready_for_pickup',
-        new_status: 'delivered',
-        pudo_location: { name: 'Store ABC' },
-        gps_validation: { passed: true, message: 'GPS valid' },
-      };
-
-      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: mockResponse,
-        error: null,
-      });
-
-      // Execute
-      const result = await pudoService.processPickup(mockQrHash, mockShipmentId, mockGpsData);
-
-      // Assertions
-      expect(result.success).toBe(true);
-      expect(result.new_status).toBe('delivered');
-      expect(supabaseLocal.functions.invoke).toHaveBeenCalledWith(
-        'update-remote-shipment-status',
-        expect.objectContaining({
-          body: {
-            shipment_id: mockShipmentId,
-            qr_data: mockQrHash,
-            gps_latitude: mockGpsData.latitude,
-            gps_longitude: mockGpsData.longitude,
-            gps_accuracy: mockGpsData.accuracy,
-          },
-        })
-      );
-      expect(logger.success).toHaveBeenCalled();
-    });
-
-    it('should throw error if no active session', async () => {
-      // Setup mocks
+  describe('processScan - Error Handling', () => {
+    it('should throw error when no session is available', async () => {
       (supabase.auth.getSession as jest.Mock).mockResolvedValue({
         data: { session: null },
       });
 
-      // Execute & Assert
-      await expect(
-        pudoService.processPickup(mockQrHash, mockShipmentId, mockGpsData)
-      ).rejects.toThrow('No hay sesión activa');
+      await expect(pudoService.processScan('BS-DEL-7A2D335C-8FA')).rejects.toThrow(
+        'No hay sesión activa. Por favor, inicia sesión nuevamente.'
+      );
     });
 
-    it('should handle pickup Edge Function errors', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
+    it('should throw error when JWT decode fails', async () => {
       (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
+        data: {
+          session: {
+            access_token: 'invalid-token',
+            user: { id: 'user-123' },
+          },
+        },
       });
 
-      const mockError = {
-        message: 'Invalid QR',
-        context: {
-          json: jest.fn().mockResolvedValue({ error: 'QR validation failed' }),
-          clone: jest.fn().mockReturnThis(),
+      (jwtDecode as jest.Mock).mockImplementation(() => {
+        throw new Error('Invalid token');
+      });
+
+      await expect(pudoService.processScan('BS-DEL-7A2D335C-8FA')).rejects.toThrow(
+        'Invalid token'
+      );
+    });
+
+    it('should throw error when JWT missing sub claim', async () => {
+      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'test-token',
+            user: { id: 'user-123' },
+          },
         },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        email: 'pudo@example.com',
+        // missing sub claim
+      });
+
+      await expect(pudoService.processScan('BS-DEL-7A2D335C-8FA')).rejects.toThrow(
+        'JWT inválido: no contiene ID de usuario (sub claim)'
+      );
+    });
+
+    it('should throw error when Edge Function returns error', async () => {
+      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
+          },
+        },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
+      });
+
+      const errorContext = {
+        json: jest.fn().mockResolvedValue({
+          error: 'QR no válido o destino equivocado',
+        }),
       };
+
+      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
+        error: {
+          message: 'Edge Function error',
+          context: errorContext,
+        },
+      });
+
+      await expect(pudoService.processScan('INVALID-QR')).rejects.toThrow(
+        'Error procesando escaneo: QR no válido o destino equivocado'
+      );
+    });
+
+    it('should throw error when Edge Function returns empty response', async () => {
+      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
+          },
+        },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
+      });
 
       (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
         data: null,
-        error: mockError,
-      });
-
-      // Execute & Assert
-      await expect(
-        pudoService.processPickup(mockQrHash, mockShipmentId, mockGpsData)
-      ).rejects.toThrow('Error en entrega');
-    });
-
-    it('should process pickup without GPS data', async () => {
-      // Setup mocks
-      const mockSession = { access_token: 'mock-jwt-token' };
-      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
-      });
-
-      const mockResponse: PickupResult = {
-        success: true,
-        action_type: 'delivery_confirmation',
-        previous_status: 'ready_for_pickup',
-        new_status: 'delivered',
-        pudo_location: { name: 'Store ABC' },
-        gps_validation: { passed: false, message: 'GPS unavailable' },
-      };
-
-      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: mockResponse,
         error: null,
       });
 
-      // Execute
-      const result = await pudoService.processPickup(mockQrHash, mockShipmentId, null);
+      await expect(pudoService.processScan('BS-DEL-7A2D335C-8FA')).rejects.toThrow(
+        'Respuesta vacía del servidor'
+      );
+    });
 
-      // Assertions
-      expect(result.success).toBe(true);
-      expect(supabaseLocal.functions.invoke).toHaveBeenCalledWith(
-        'update-remote-shipment-status',
-        expect.objectContaining({
-          body: {
-            shipment_id: mockShipmentId,
-            qr_data: mockQrHash,
-            gps_latitude: undefined,
-            gps_longitude: undefined,
-            gps_accuracy: undefined,
+    it('should throw error when response contains error field', async () => {
+      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
           },
-        })
+        },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
+      });
+
+      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
+        data: {
+          error: 'Estado inválido del shipment',
+        },
+      });
+
+      await expect(pudoService.processScan('BS-DEL-7A2D335C-8FA')).rejects.toThrow(
+        'Estado inválido del shipment'
       );
     });
   });
 
-  describe('Error Handling Edge Cases', () => {
-    it('should handle empty response from Edge Function', async () => {
-      const mockSession = { access_token: 'mock-jwt-token' };
+  describe('Response Structure', () => {
+    it('should include duration_ms in response', async () => {
       (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
+          },
+        },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
       });
 
       (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: null,
-        error: null,
+        data: {
+          success: true,
+          operation_type: 'dropoff',
+          message: 'Test',
+          timestamp: '2026-03-31T22:20:00Z',
+          duration_ms: 250,
+        },
       });
 
-      await expect(
-        pudoService.processDropoff('BS-TEST', { latitude: 0, longitude: 0, accuracy: 0 })
-      ).rejects.toThrow('Respuesta vacía del servidor');
+      const result = await pudoService.processScan('BS-DEL-7A2D335C-8FA');
+
+      expect(result.duration_ms).toBeDefined();
+      expect(typeof result.duration_ms).toBe('number');
+      expect(result.duration_ms).toBeGreaterThan(0);
     });
 
-    it('should handle error response in data field', async () => {
-      const mockSession = { access_token: 'mock-jwt-token' };
+    it('should include operation_type in response', async () => {
       (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
+        data: {
+          session: {
+            access_token: 'test-token-123',
+            user: { id: 'user-123' },
+          },
+        },
+      });
+
+      (jwtDecode as jest.Mock).mockReturnValue({
+        sub: 'user-123',
+        email: 'pudo@example.com',
       });
 
       (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: { error: 'Custom error message' },
-        error: null,
+        data: {
+          success: true,
+          operation_type: 'dropoff',
+          message: 'Test',
+          timestamp: '2026-03-31T22:20:00Z',
+          duration_ms: 200,
+        },
       });
 
-      await expect(
-        pudoService.processDropoff('BS-TEST', { latitude: 0, longitude: 0, accuracy: 0 })
-      ).rejects.toThrow('Custom error message');
-    });
+      const result: ScanResult = await pudoService.processScan('BS-DEL-7A2D335C-8FA');
 
-    it('should log JWT decode info for monitoring', async () => {
-      const mockSession = {
-        access_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3N1cGFiYXNlLmlvIiwic3ViIjoiMTIzIn0.test',
-      };
-      (supabase.auth.getSession as jest.Mock).mockResolvedValue({
-        data: { session: mockSession },
-      });
-
-      (supabaseLocal.functions.invoke as jest.Mock).mockResolvedValue({
-        data: { package: {}, gps_validation: { passed: true, message: 'OK' } },
-        error: null,
-      });
-
-      await pudoService.processDropoff('BS-TEST', { latitude: 0, longitude: 0, accuracy: 0 });
-
-      expect(logger.debug).toHaveBeenCalledWith(
-        expect.stringContaining('JWT decoded'),
-        expect.any(Object),
-        'pudoService'
-      );
+      expect(result.operation_type).toBeDefined();
+      expect(['dropoff', 'pickup']).toContain(result.operation_type);
     });
   });
 });
