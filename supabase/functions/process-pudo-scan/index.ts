@@ -201,8 +201,8 @@ serve(async (req: Request) => {
     
     const { data: shipment, error: shipmentErr } = await localSupabase
       .from('shipments')
-      .select('id, delivery_qr_code, pickup_qr_code, shipment_status, tracking_number, user_id, shipping_address, shipping_city')
-      .or(`delivery_qr_code.eq.${scanned_code},pickup_qr_code.eq.${scanned_code}`)
+      .select('id, delivery_qr_code, pickup_qr_code, return_qr_code, shipment_status, tracking_number, user_id, shipping_address, shipping_city')
+      .or(`delivery_qr_code.eq.${scanned_code},pickup_qr_code.eq.${scanned_code},return_qr_code.eq.${scanned_code}`)
       .single()
 
     if (shipmentErr || !shipment) {
@@ -237,9 +237,9 @@ serve(async (req: Request) => {
     })
 
     // ─────────────────────────────────────────────────
-    // 5. DETECTAR TIPO DE OPERACIÓN (DROPOFF vs PICKUP)
+    // 5. DETECTAR TIPO DE OPERACIÓN (DROPOFF vs PICKUP vs RETURN)
     // ─────────────────────────────────────────────────
-    let operationType: 'dropoff' | 'pickup'
+    let operationType: 'dropoff' | 'pickup' | 'return'
     let expectedStatus: string
     let newStatus: string
     let timestampField: string
@@ -259,8 +259,16 @@ serve(async (req: Request) => {
       expectedStatus = 'delivered_pudo'
       newStatus = 'delivered_user'
       timestampField = 'pickup_validated_at'
-      actionType = 'delivery_confirmation' // o 'return_confirmation' si aplica
+      actionType = 'delivery_confirmation'
       console.log('[VALIDATE] ✓ Operation: PICKUP (pickup_qr_code matched)')
+    } else if (shipment.return_qr_code === scanned_code) {
+      // CASO 3: Devolución en PUDO
+      operationType = 'return'
+      expectedStatus = 'in_return_pudo'
+      newStatus = 'in_return'
+      timestampField = 'return_validated_at'
+      actionType = 'return_confirmation'
+      console.log('[VALIDATE] ✓ Operation: RETURN (return_qr_code matched)')
     } else {
       return errorResponse(400, 'QR code no coincide con ninguno de los códigos registrados')
     }
@@ -397,6 +405,26 @@ serve(async (req: Request) => {
     console.log(`[UPDATE] ✓ Shipment successfully updated and verified to ${newStatus}`)
 
     // ─────────────────────────────────────────────────
+    // 7.5 ACTUALIZAR USER_STATUS EN BD LOCAL (si aplica)
+    // Para operaciones PICKUP, actualizar users.user_status = 'received'
+    // ─────────────────────────────────────────────────
+    if (operationType === 'pickup' && newStatus === 'delivered_user') {
+      console.log('[UPDATE] Updating user status to "received"...')
+      const { error: userUpdateErr } = await localSupabase
+        .from('users')
+        .update({ user_status: 'received' })
+        .eq('id', shipment.user_id)
+
+      if (userUpdateErr) {
+        console.error('[UPDATE] ⚠️ Failed to update user status:', userUpdateErr.message)
+        console.error('[UPDATE] ⚠️ Error details:', userUpdateErr)
+        // No retornamos error, solo registramos la advertencia
+      } else {
+        console.log('[UPDATE] ✓ User status updated to "received"')
+      }
+    }
+
+    // ─────────────────────────────────────────────────
     // 8. REGISTRAR EN BD CLOUD - packages
     // ─────────────────────────────────────────────────
     console.log('[CLOUD] Creating package record...')
@@ -404,13 +432,14 @@ serve(async (req: Request) => {
       .from('packages')
       .insert({
         tracking_code: scanned_code,
-        type: operationType === 'dropoff' ? 'delivery' : 'return',
-        status: operationType === 'dropoff' ? 'in_location' : 'picked_up',
+        type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
+        status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
         location_id: ownerLocation.id,
         source_system: 'brickshare',
         external_shipment_id: shipment.id,
         received_at: operationType === 'dropoff' ? now : undefined,
         picked_up_at: operationType === 'pickup' ? now : undefined,
+        returned_at: operationType === 'return' ? now : undefined,
         remote_shipment_data: shipment,
       })
       .select()
@@ -490,19 +519,21 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────
     // 11. RETORNAR RESPUESTA EXITOSA
     // ─────────────────────────────────────────────────
-    return new Response(
+      return new Response(
       JSON.stringify({
         success: true,
         operation_type: operationType,
         message: operationType === 'dropoff' 
           ? 'Paquete recepcionado exitosamente en PUDO'
-          : 'Paquete entregado exitosamente al cliente',
+          : operationType === 'pickup'
+          ? 'Paquete entregado exitosamente al cliente'
+          : 'Paquete recibido para devolución',
         package: {
           id: newPackage?.id,
           tracking_code: scanned_code,
           tracking_number: shipment.tracking_number,
-          status: newStatus,
-          type: operationType === 'dropoff' ? 'delivery' : 'return',
+          status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
+          type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
           location: {
             id: ownerLocation.id,
             name: ownerLocation.name,
@@ -511,6 +542,7 @@ serve(async (req: Request) => {
           },
           received_at: operationType === 'dropoff' ? now : undefined,
           picked_up_at: operationType === 'pickup' ? now : undefined,
+          returned_at: operationType === 'return' ? now : undefined,
         },
         shipment: {
           id: shipment.id,

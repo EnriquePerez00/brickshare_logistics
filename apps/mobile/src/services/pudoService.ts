@@ -4,11 +4,11 @@ import { logger } from '../utils/logger';
 
 /**
  * Interface unificada para resultado de escaneo QR
- * Soporta tanto recepción (dropoff) como entrega (pickup) a cliente
+ * Soporta recepción (dropoff), entrega (pickup) a cliente y devolución (return)
  */
 export interface ScanResult {
   success: boolean;
-  operation_type: 'dropoff' | 'pickup';
+  operation_type: 'dropoff' | 'pickup' | 'return';
   message: string;
   package?: {
     id: string;
@@ -24,6 +24,7 @@ export interface ScanResult {
     };
     received_at?: string;
     picked_up_at?: string;
+    returned_at?: string;
   };
   shipment?: {
     id: string;
@@ -61,20 +62,22 @@ export interface ScanResult {
  */
 export const pudoService = {
   /**
-   * Procesa un escaneo QR (DROPOFF o PICKUP)
+   * Procesa un escaneo QR (DROPOFF, PICKUP o RETURN)
    * 
    * Detecta automáticamente el tipo de operación basándose en:
    * - Si código está en delivery_qr_code → DROPOFF (recepción en PUDO)
    * - Si código está en pickup_qr_code → PICKUP (entrega a cliente)
+   * - Si código está en return_qr_code → RETURN (devolución en PUDO)
    * 
    * La Edge Function se encarga de:
-   * 1. Buscar código en ambos campos
-   * 2. Determinar tipo de operación
+   * 1. Buscar código en los tres campos de QR
+   * 2. Determinar tipo de operación automáticamente
    * 3. Validar estado actual del shipment
    * 4. Actualizar shipment con timestamp correspondiente
-   * 5. Registrar auditoría completa
+   * 5. Actualizar user_status a 'received' si es PICKUP
+   * 6. Registrar auditoría completa
    * 
-   * @param scannedCode - Código QR escaneado (delivery o pickup)
+   * @param scannedCode - Código QR escaneado (delivery, pickup o return)
    * @param gpsData - Datos GPS validados (lat, lon, accuracy)
    * @returns Resultado con tipo de operación detectada
    */
