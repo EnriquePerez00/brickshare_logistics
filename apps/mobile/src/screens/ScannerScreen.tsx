@@ -26,10 +26,10 @@ export default function ScannerScreen() {
   const [mode, setMode] = useState<ScanMode>('dropoff');
   const [loading, setLoading] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const [locationId, setLocationId] = useState<string | null>(null);
+  const [, setLocationId] = useState<string | null>(null);
   
   // GPS Hook (Recomendación 1: GPS siempre caliente)
-  const { currentLocation, getValidatedLocation, permissionGranted: gpsPermissionGranted } = useGPSValidation();
+  const { currentLocation, getValidatedLocation } = useGPSValidation();
 
   const [lastResult, setLastResult] = useState<any>(null);
 
@@ -43,18 +43,7 @@ export default function ScannerScreen() {
 
   const { decodeQR, QRDecoderView } = useQRDecoder();
 
-  // Logs panel logic
-  const [showLogs, setShowLogs] = useState(false);
-  const [logs, setLogs] = useState<any[]>([]);
 
-  useEffect(() => {
-    if (showLogs) {
-      const interval = setInterval(() => {
-        setLogs([...logger.getLogs()].reverse());
-      }, 500);
-      return () => clearInterval(interval);
-    }
-  }, [showLogs]);
 
   useEffect(() => {
     const initialize = async () => {
@@ -66,14 +55,14 @@ export default function ScannerScreen() {
       }
       
       const { data, error } = await supabase
-        .from('locations')
-        .select('id')
-        .eq('owner_id', user.id)
+        .from('user_locations')
+        .select('location_id')
+        .eq('user_id', user.id)
         .single() as any;
         
-      if (data?.id) {
-        setLocationId(data.id);
-        logger.success('Location found', { locationId: data.id }, 'ScannerScreen');
+      if (data?.location_id) {
+        setLocationId(data.location_id);
+        logger.success('Location found', { locationId: data.location_id }, 'ScannerScreen');
       }
       if (error && error.code !== 'PGRST116') {
         logger.warn('Error fetching location', error, 'ScannerScreen');
@@ -95,7 +84,7 @@ export default function ScannerScreen() {
     );
   }
 
-  const handleBarCodeScanned = async ({ type, data }: { type: string; data: string }) => {
+  const handleBarCodeScanned = async ({ data }: { type: string; data: string }) => {
     setScanned(true);
     setLoading(true);
     setLastResult(null);

@@ -85,7 +85,7 @@ serve(async (req: Request) => {
       .eq('id', ownerUser.id)
       .single()
 
-    if (!ownerProfile || ownerProfile.role !== 'owner') {
+    if (!ownerProfile || ownerProfile.role !== 'user') {
       return errorResponse(403, 'Only PUDO operators can update shipment status')
     }
 
@@ -384,8 +384,10 @@ async function logPudoScan(
       api_response_code: responseCode,
       api_response_message: responseMessage,
       api_request_duration_ms: durationMs,
-      device_info: 'Mobile App',
-      app_version: '1.0.0',
+      metadata: {
+        device_info: 'Mobile App',
+        app_version: '1.0.0',
+      }
     })
   } catch (err) {
     console.error('Failed to log PUDO scan:', err)

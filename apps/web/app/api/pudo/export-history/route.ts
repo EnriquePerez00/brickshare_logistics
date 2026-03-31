@@ -25,14 +25,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   
-  // Llamar a la función RPC de exportación
-  const { data, error } = await supabase.rpc('export_pudo_operations_csv', {
+  // Llamar a la función RPC de exportación con tipos dinámicos
+  const { data, error } = await (supabase.rpc as any)('export_pudo_operations_csv', {
     p_location_id: locationId,
     p_date_from: dateFrom ? new Date(dateFrom).toISOString() : null,
     p_date_to: dateTo ? new Date(dateTo).toISOString() : null,
-    p_action_type: actionType,
-    p_result_filter: resultFilter,
-    p_tracking_search: trackingSearch
+    p_action_type: actionType || null,
+    p_result_filter: resultFilter || null,
+    p_tracking_search: trackingSearch || null
   });
   
   if (error) {

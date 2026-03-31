@@ -44,7 +44,7 @@ export function AdminSearchBar() {
         .from('packages')
         .select(`
           id, tracking_code, status, created_at, updated_at,
-          location:locations(name, location_name, city),
+          location:locations(name, city),
           customer:users!packages_customer_id_fkey(first_name, last_name, email)
         `)
         .ilike('tracking_code', q)
@@ -58,9 +58,9 @@ export function AdminSearchBar() {
       supabase
         .from('locations')
         .select(`
-          id, name, location_name, address, city, postal_code, is_active
+          id, name, address, city, postal_code, is_active
         `)
-        .or(`name.ilike.${q},location_name.ilike.${q},address.ilike.${q},city.ilike.${q}`)
+        .or(`name.ilike.${q},address.ilike.${q},city.ilike.${q}`)
         .limit(10),
     ])
 
@@ -118,7 +118,7 @@ export function AdminSearchBar() {
                       <div key={pkg.id} className="py-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
                         <span className="font-mono font-semibold text-zinc-900">{pkg.tracking_code}</span>
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${s.color}`}>{s.label}</span>
-                        <span className="text-zinc-500">{pkg.location?.location_name || pkg.location?.name || '—'} · {pkg.location?.city || ''}</span>
+                        <span className="text-zinc-500">{pkg.location?.name || '—'} · {pkg.location?.city || ''}</span>
                         {pkg.customer && (
                           <span className="text-zinc-500">{pkg.customer.first_name} {pkg.customer.last_name} ({pkg.customer.email})</span>
                         )}
@@ -168,7 +168,7 @@ export function AdminSearchBar() {
                 <div className="divide-y divide-zinc-100">
                   {results.locations.map((loc: any) => (
                     <div key={loc.id} className="py-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
-                      <span className="font-medium text-zinc-900">{loc.location_name || loc.name}</span>
+                      <span className="font-medium text-zinc-900">{loc.name}</span>
                       <span className="text-zinc-500">{loc.address}, {loc.city} {loc.postal_code}</span>
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${loc.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                         {loc.is_active ? 'Activo' : 'Inactivo'}

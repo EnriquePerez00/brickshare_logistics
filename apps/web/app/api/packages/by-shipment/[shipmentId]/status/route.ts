@@ -14,9 +14,10 @@ const SHARED_SECRET = process.env.SUPABASE_INTEGRATION_SECRET || 'change-me-in-p
  */
 export async function GET(
   req: Request,
-  { params }: { params: { shipmentId: string } }
+  { params }: { params: Promise<{ shipmentId: string }> }
 ) {
-  console.log('[API Packages By Shipment] Inbound GET request for shipment:', params.shipmentId)
+  const { shipmentId } = await params
+  console.log('[API Packages By Shipment] Inbound GET request for shipment:', shipmentId)
   
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -35,7 +36,7 @@ export async function GET(
       )
     }
 
-    const externalShipmentId = params.shipmentId
+    const externalShipmentId = shipmentId
 
     // 2. Consultar el package por external_shipment_id
     const { data: pkg, error: pkgError } = await supabase

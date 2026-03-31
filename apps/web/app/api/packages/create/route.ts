@@ -136,7 +136,7 @@ export async function POST(req: Request) {
           type: newPackage.type,
           status: newPackage.status,
           location_id: newPackage.location_id,
-          location_name: location.name,
+          name: location.name,
           external_shipment_id: newPackage.external_shipment_id,
           created_at: newPackage.created_at
         }

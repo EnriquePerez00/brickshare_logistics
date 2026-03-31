@@ -50,7 +50,7 @@ export function AdminShipmentsTable() {
 
     // Fetch select options
     const [locRes, userRes] = await Promise.all([
-      supabase.from('locations').select('id, name, location_name').eq('is_active', true).order('name'),
+      supabase.from('locations').select('id, name').eq('is_active', true).order('name'),
       supabase.from('users').select('id, first_name, last_name, email, role').order('email'),
     ])
     setLocations((locRes.data || []) as any[])
@@ -61,7 +61,7 @@ export function AdminShipmentsTable() {
       .from('packages')
       .select(`
         id, tracking_code, status, created_at, updated_at,
-        location:locations(id, name, location_name, city),
+        location:locations(id, name, city),
         customer:users!packages_customer_id_fkey(id, first_name, last_name, email)
       `)
       .order('created_at', { ascending: false })
@@ -132,7 +132,7 @@ export function AdminShipmentsTable() {
             >
               <option value="">Todos los locales</option>
               {locations.map((l: any) => (
-                <option key={l.id} value={l.id}>{l.location_name || l.name}</option>
+                <option key={l.id} value={l.id}>{l.name}</option>
               ))}
             </select>
           </div>
@@ -147,7 +147,7 @@ export function AdminShipmentsTable() {
               onChange={e => setFilterUser(e.target.value)}
             >
               <option value="">Todos los usuarios</option>
-              {users.filter((u: any) => u.role === 'usuarios').map((u: any) => (
+              {users.filter((u: any) => u.role === 'user').map((u: any) => (
                 <option key={u.id} value={u.id}>
                   {u.first_name || u.last_name ? `${u.first_name} ${u.last_name}` : u.email}
                 </option>
@@ -224,7 +224,7 @@ export function AdminShipmentsTable() {
                         {statusLabel[pkg.status] || pkg.status}
                       </span>
                     </TableCell>
-                    <TableCell className="text-zinc-700">{(pkg.location as any)?.location_name || (pkg.location as any)?.name || '—'}</TableCell>
+                    <TableCell className="text-zinc-700">{(pkg.location as any)?.name || '—'}</TableCell>
                     <TableCell className="text-zinc-500">{(pkg.location as any)?.city || '—'}</TableCell>
                     <TableCell className="text-zinc-500 text-sm">
                       {(pkg.customer as any)
