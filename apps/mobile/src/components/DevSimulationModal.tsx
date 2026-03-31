@@ -5,10 +5,10 @@ interface DevSimulationModalProps {
   visible: boolean;
   onClose: () => void;
   onProcess: (data: string) => void;
-  mode: 'dropoff' | 'pickup';
+  mode?: 'dropoff' | 'pickup';
 }
 
-export const DevSimulationModal: React.FC<DevSimulationModalProps> = ({ visible, onClose, onProcess, mode }) => {
+export const DevSimulationModal: React.FC<DevSimulationModalProps> = ({ visible, onClose, onProcess, mode = 'dropoff' }) => {
   const [simInput, setSimInput] = useState('');
   const simInputRef = useRef<TextInput>(null);
 
@@ -25,19 +25,18 @@ export const DevSimulationModal: React.FC<DevSimulationModalProps> = ({ visible,
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <Text style={styles.modalTitle}>
-            {mode === 'dropoff' ? '📦 Simular Código de Barras' : '🔐 Simular QR de Entrega'}
+            📦 Simular Código QR
           </Text>
           <Text style={styles.modalSubtitle}>
-            {mode === 'dropoff' 
-              ? 'Pega aquí el tracking code (ej: BS-DEL-7A2D335C-8FA).\nEl sistema consultará la API remota automáticamente.'
-              : 'Pega aquí el contenido del QR (JWT token):'}
+            Pega aquí el código QR escaneado (delivery o pickup).
+            El sistema detectará automáticamente el tipo de operación.
           </Text>
           <TextInput
             ref={simInputRef}
             style={styles.modalInput}
             value={simInput}
             onChangeText={setSimInput}
-            placeholder={mode === 'dropoff' ? 'ej: BS-DEL-7A2D335C-8FA' : 'ej: eyJhbGciOiJIUzI1NiIs...'}
+            placeholder="ej: BS-DEL-7A2D335C-8FA o BS-PU-ABC123DEF"
             placeholderTextColor="#71717a"
             multiline
             autoFocus
