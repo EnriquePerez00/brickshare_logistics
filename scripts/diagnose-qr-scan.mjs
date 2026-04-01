@@ -20,8 +20,20 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '../supabase/.env.local') });
 dotenv.config({ path: join(__dirname, '../.env.local') });
 
-const NGROK_URL = process.env.SUPABASE_brickshare_API_URL || 'https://semblably-dizzied-bruno.ngrok-free.dev';
-const LOCAL_DB_KEY = process.env.SUPABASE_brickshare_SERVICE_ROLE_KEY || 'sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz';
+const NGROK_URL = process.env.SUPABASE_brickshare_API_URL;
+const LOCAL_DB_KEY = process.env.SUPABASE_brickshare_SERVICE_ROLE_KEY;
+
+// Validación obligatoria de variables de entorno
+if (!NGROK_URL || !LOCAL_DB_KEY) {
+  console.error('❌ ERROR: Variables de entorno requeridas no están configuradas');
+  console.error('   SUPABASE_brickshare_API_URL:', NGROK_URL ? '✅ Configurada' : '❌ FALTA');
+  console.error('   SUPABASE_brickshare_SERVICE_ROLE_KEY:', LOCAL_DB_KEY ? '✅ Configurada' : '❌ FALTA');
+  console.error('\n💡 Solución: Configurar en supabase/.env.local o .env.local');
+  console.error('   Ejemplo en supabase/.env.local:');
+  console.error('   SUPABASE_brickshare_API_URL=https://your-ngrok-url.ngrok-free.dev');
+  console.error('   SUPABASE_brickshare_SERVICE_ROLE_KEY=sb_secret_...');
+  process.exit(1);
+}
 
 const QR_CODE = 'BS-DEL-4BCD6EB3-C99';
 

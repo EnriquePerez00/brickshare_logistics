@@ -32,13 +32,28 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 // BD CLOUD (Logistics) - Para auth y logs
 const CLOUD_SUPABASE_URL = Deno.env.get('bricklogistics_URL') || 'https://qumjzvhtotcvnzpjgjkl.supabase.co'
 const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
-const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('bricklogistics_SERVICE_ROLE_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF1bWp6dmh0b3Rjdm56cGpnamtsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0NjYzMCwiZXhwIjoyMDg5NTIyNjMwfQ.qFhuNtT7jw5TrvJSzg28GiYVPQGLMSJ9JYeWhMDb_4o'
+const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
 // BD LOCAL (Brickshare via ngrok) - Para validar y actualizar shipments
-// Usar ngrok URL para acceder desde Supabase Cloud Docker container
-// Fallback a host.docker.internal solo para desarrollo local sin ngrok
-const LOCAL_DB_URL = Deno.env.get('brickshare_API_URL') || 'https://semblably-dizzied-bruno.ngrok-free.dev'
-const LOCAL_DB_KEY = Deno.env.get('brickshare_SERVICE_ROLE_KEY') || 'sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz'
+// Debe configurarse en Supabase Dashboard → Edge Functions → Secrets
+const LOCAL_DB_URL = Deno.env.get('BRICKSHARE_LOCAL_DB_URL')
+const LOCAL_DB_KEY = Deno.env.get('BRICKSHARE_LOCAL_SERVICE_ROLE_KEY')
+
+// Validación en startup
+if (!CLOUD_SUPABASE_SERVICE_ROLE) {
+  console.error('[FATAL] SUPABASE_SERVICE_ROLE_KEY not set (should be auto-injected by Supabase)')
+  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY')
+}
+
+if (!LOCAL_DB_URL || !LOCAL_DB_KEY) {
+  console.error('[FATAL] Local Brickshare DB credentials not configured')
+  console.error('  BRICKSHARE_LOCAL_DB_URL:', LOCAL_DB_URL ? '✅ SET' : '❌ MISSING')
+  console.error('  BRICKSHARE_LOCAL_SERVICE_ROLE_KEY:', LOCAL_DB_KEY ? '✅ SET' : '❌ MISSING')
+  console.error('\n💡 Configure in Supabase Dashboard → Project Settings → Edge Functions → Secrets')
+  console.error('   1. BRICKSHARE_LOCAL_DB_URL = https://your-ngrok-url.ngrok-free.dev')
+  console.error('   2. BRICKSHARE_LOCAL_SERVICE_ROLE_KEY = sb_secret_...')
+  throw new Error('Missing Brickshare DB credentials')
+}
 
 console.log('[STARTUP] ===== DUAL DATABASE CONFIGURATION =====')
 console.log('[STARTUP] CLOUD DB (Logistics):', CLOUD_SUPABASE_URL)
@@ -371,16 +386,19 @@ serve(async (req: Request) => {
       .eq('id', shipment.id)
       .single()
 
-    if (verifyErr) {
-      console.error('[UPDATE] ❌ Failed to verify update:', verifyErr.message)
+    if (verifyErr || !verifiedShipment) {
+      console.error('[UPDATE] ❌ Failed to verify update:', verifyErr?.message || 'No data returned')
       return errorResponse(500, 'Error al verificar actualización del shipment')
     }
 
-    console.log('[UPDATE] ✓ Verification result:', verifiedShipment)
+    // Type assertion after null check - convert to unknown first for type safety
+    const verifiedData = verifiedShipment as unknown as { shipment_status: string; [key: string]: any }
 
-    if (verifiedShipment.shipment_status !== newStatus) {
+    console.log('[UPDATE] ✓ Verification result:', verifiedData)
+
+    if (verifiedData.shipment_status !== newStatus) {
       console.error('[UPDATE] ❌ Update verification failed!')
-      console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedShipment.shipment_status)
+      console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedData.shipment_status)
       
       // Registrar fallo de verificación
       await cloudSupabase.from('pudo_scan_logs').insert({
@@ -392,7 +410,7 @@ serve(async (req: Request) => {
         action_type: actionType,
         api_request_successful: false,
         api_response_code: 500,
-        api_response_message: `Update verification failed: status is ${verifiedShipment.shipment_status}`,
+        api_response_message: `Update verification failed: status is ${verifiedData.shipment_status}`,
         api_request_duration_ms: Date.now() - startTime,
         metadata: {
           scanned_code,
@@ -400,7 +418,7 @@ serve(async (req: Request) => {
           operation_type: operationType,
           error: 'verification_failed',
           expected_status: newStatus,
-          actual_status: verifiedShipment.shipment_status,
+          actual_status: verifiedData.shipment_status,
         },
       })
 
