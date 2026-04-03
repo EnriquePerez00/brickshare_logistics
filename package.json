@@ -15,6 +15,7 @@
     "dev:mobile:ios": "cd apps/mobile && expo run:ios",
     "dev:mobile:android": "cd apps/mobile && expo run:android",
     "dev:tunnel": "node scripts/start-with-ngrok.mjs",
+    "tunnel:start": "node scripts/ngrok-only.mjs",
     "build": "turbo run build",
     "build:web": "turbo run build --filter=web",
     "build:mobile:ios": "cd apps/mobile && eas build --platform ios --profile preview",

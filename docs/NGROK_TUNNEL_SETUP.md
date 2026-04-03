@@ -1,4 +1,4 @@
-# 🌐 ngrok Tunnel Setup - Automatic Initialization
+ngrok http# 🌐 ngrok Tunnel Setup - Automatic Initialization
 
 ## Overview
 
@@ -20,14 +20,25 @@ The Edge Functions on DB1 Cloud cannot directly access DB2 Local. The solution i
    # or download from https://ngrok.com/download
    ```
 
-2. **ngrok authenticated** (one-time setup):
+2. **ngrok authenticated** (one-time setup) ✅ **CONFIGURADO**:
    ```bash
    ngrok config add-authtoken YOUR_AUTH_TOKEN
    ```
+   
+   **Auth Token ya configurado**: El token de autenticación está guardado en:
+   `/Users/I764690/Library/Application Support/ngrok/ngrok.yml`
+   
+   Para verificar: `ngrok config check`
 
 3. **Reserved ngrok domain** (optional but recommended):
    - Domain: `semblably-dizzied-bruno.ngrok-free.dev`
    - Configure at: https://dashboard.ngrok.com/domains
+
+## Puerto Correcto
+
+⚠️ **IMPORTANTE**: El puerto de ngrok es **54331**, NO 54321.
+- Puerto 54321: Supabase local (API Gateway)
+- Puerto 54331: Puerto personalizado para túnel ngrok
 
 ## Quick Start
 
@@ -68,7 +79,7 @@ supabase start
 
 **Terminal 2 - Start ngrok:**
 ```bash
-ngrok http 54321 --domain=semblably-dizzied-bruno.ngrok-free.dev
+ngrok http 54331 --domain=semblably-dizzied-bruno.ngrok-free.dev
 ```
 
 ## Available Commands
@@ -135,7 +146,8 @@ SUPABASE_brickshare_SERVICE_ROLE_KEY=<your-service-role-key>
 │                                                         │
 │  ┌──────────────────────────┐  ┌─────────────────────┐ │
 │  │   Supabase Local (DB2)   │  │  ngrok Tunnel       │ │
-│  │   http://localhost:54321 │  │  (exposes locally)  │ │
+│  │   http://localhost:54321 │  │  Port: 54331        │ │
+│  │                          │  │  (exposes locally)  │ │
 │  └──────────────────────────┘  └─────────────────────┘ │
 │           ▲                              │              │
 │           └──────────────────────────────┘              │

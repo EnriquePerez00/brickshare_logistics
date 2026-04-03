@@ -127,11 +127,14 @@ export const pudoService = {
 
       // 2️⃣ Invocar Edge Function en DB1 con JWT
       // IMPORTANTE: Usar X-Auth-Token en lugar de Authorization para evitar validación de Kong
+      // CRÍTICO: Invocar en supabase (Cloud), NO en supabaseLocal
+      // La edge function está desplegada en DB1 Cloud y desde ahí conecta a DB2 Local
       logger.debug('📡 [pudoService] Invoking Edge Function process-pudo-scan', 
         { 
           scannedCode,
           token_preview: session.access_token.substring(0, 30) + '...',
-          supabaseLocal_url: (supabaseLocal as any)?.url || 'UNKNOWN',
+          supabase_url: 'https://qumjzvhtotcvnzpjgjkl.supabase.co',
+          edge_function: 'process-pudo-scan',
         }, 'pudoService');
 
       // Detectar si estamos en modo desarrollo via variable de entorno
@@ -148,7 +151,7 @@ export const pudoService = {
         logger.debug('🔧 [pudoService] DEV MODE: Adding X-Dev-Bypass header', {}, 'pudoService');
       }
 
-      const { data, error } = await supabaseLocal.functions.invoke('process-pudo-scan', {
+      const { data, error } = await supabase.functions.invoke('process-pudo-scan', {
         headers,
         body: {
           scanned_code: scannedCode,

@@ -39,3 +39,6 @@ apps/mobile/ios/
 
 # Supabase
 supabase/.temp/
+
+# Logs
+*.log

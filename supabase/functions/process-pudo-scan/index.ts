@@ -36,8 +36,8 @@ const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
 // BD LOCAL (Brickshare via ngrok) - Para validar y actualizar shipments
 // Debe configurarse en Supabase Dashboard → Edge Functions → Secrets
-const LOCAL_DB_URL = Deno.env.get('BRICKSHARE_LOCAL_DB_URL')
-const LOCAL_DB_KEY = Deno.env.get('BRICKSHARE_LOCAL_SERVICE_ROLE_KEY')
+const LOCAL_DB_URL = Deno.env.get('brickshare_API_URL')
+const LOCAL_DB_KEY = Deno.env.get('brickshare_SERVICE_ROLE_KEY')
 
 // Validación en startup
 if (!CLOUD_SUPABASE_SERVICE_ROLE) {
@@ -47,11 +47,11 @@ if (!CLOUD_SUPABASE_SERVICE_ROLE) {
 
 if (!LOCAL_DB_URL || !LOCAL_DB_KEY) {
   console.error('[FATAL] Local Brickshare DB credentials not configured')
-  console.error('  BRICKSHARE_LOCAL_DB_URL:', LOCAL_DB_URL ? '✅ SET' : '❌ MISSING')
-  console.error('  BRICKSHARE_LOCAL_SERVICE_ROLE_KEY:', LOCAL_DB_KEY ? '✅ SET' : '❌ MISSING')
+  console.error('  brickshare_API_URL:', LOCAL_DB_URL ? '✅ SET' : '❌ MISSING')
+  console.error('  brickshare_SERVICE_ROLE_KEY:', LOCAL_DB_KEY ? '✅ SET' : '❌ MISSING')
   console.error('\n💡 Configure in Supabase Dashboard → Project Settings → Edge Functions → Secrets')
-  console.error('   1. BRICKSHARE_LOCAL_DB_URL = https://your-ngrok-url.ngrok-free.dev')
-  console.error('   2. BRICKSHARE_LOCAL_SERVICE_ROLE_KEY = sb_secret_...')
+  console.error('   1. brickshare_API_URL = https://your-ngrok-url.ngrok-free.dev')
+  console.error('   2. brickshare_SERVICE_ROLE_KEY = sb_secret_...')
   throw new Error('Missing Brickshare DB credentials')
 }
 
@@ -228,24 +228,7 @@ serve(async (req: Request) => {
     if (shipmentErr || !shipment) {
       console.error('[VALIDATE] ❌ QR not found in shipments table:', shipmentErr?.message)
       
-      // Registrar intento fallido en Cloud
-      await cloudSupabase.from('pudo_scan_logs').insert({
-        pudo_location_id: ownerLocation.id,
-        remote_shipment_id: scanned_code,
-        previous_status: 'unknown',
-        new_status: 'validation_failed',
-        scanned_by_user_id: ownerUser.id,
-        action_type: 'delivery_validation',
-        api_request_successful: false,
-        api_response_code: 404,
-        api_response_message: 'QR code not found or wrong destination',
-        api_request_duration_ms: Date.now() - startTime,
-        metadata: {
-          scanned_code,
-          error: 'qr_not_found',
-          validation_failed: true,
-        },
-      })
+      // REMOVED: pudo_scan_logs insert (tabla eliminada en migration 022)
 
       return errorResponse(404, 'QR no válido o destino equivocado')
     }
@@ -264,6 +247,7 @@ serve(async (req: Request) => {
     let newStatus: string
     let timestampField: string
     let actionType: 'delivery_confirmation' | 'return_confirmation'
+    let packageStatus: string
 
     if (shipment.delivery_qr_code === scanned_code) {
       // CASO 1: Recepción en PUDO
@@ -272,6 +256,7 @@ serve(async (req: Request) => {
       newStatus = 'delivered_pudo'
       timestampField = 'delivery_validated_at'
       actionType = 'delivery_confirmation'
+      packageStatus = 'in_location'
       console.log('[VALIDATE] ✓ Operation: DROPOFF (delivery_qr_code matched)')
     } else if (shipment.pickup_qr_code === scanned_code) {
       // CASO 2: Entrega a cliente
@@ -280,6 +265,7 @@ serve(async (req: Request) => {
       newStatus = 'delivered_user'
       timestampField = 'pickup_validated_at'
       actionType = 'delivery_confirmation'
+      packageStatus = 'picked_up'
       console.log('[VALIDATE] ✓ Operation: PICKUP (pickup_qr_code matched)')
     } else if (shipment.return_qr_code === scanned_code) {
       // CASO 3: Devolución en PUDO
@@ -288,6 +274,7 @@ serve(async (req: Request) => {
       newStatus = 'in_return'
       timestampField = 'return_validated_at'
       actionType = 'return_confirmation'
+      packageStatus = 'returned'
       console.log('[VALIDATE] ✓ Operation: RETURN (return_qr_code matched)')
     } else {
       return errorResponse(400, 'QR code no coincide con ninguno de los códigos registrados')
@@ -299,26 +286,7 @@ serve(async (req: Request) => {
     if (shipment.shipment_status !== expectedStatus) {
       console.error('[VALIDATE] ❌ Invalid status:', shipment.shipment_status)
       
-      // Registrar intento fallido
-      await cloudSupabase.from('pudo_scan_logs').insert({
-        pudo_location_id: ownerLocation.id,
-        remote_shipment_id: shipment.id,
-        previous_status: shipment.shipment_status,
-        new_status: 'validation_failed',
-        scanned_by_user_id: ownerUser.id,
-        action_type: actionType,
-        api_request_successful: false,
-        api_response_code: 400,
-        api_response_message: `Invalid status: expected '${expectedStatus}', got '${shipment.shipment_status}'`,
-        api_request_duration_ms: Date.now() - startTime,
-        metadata: {
-          scanned_code,
-          operation_type: operationType,
-          error: 'invalid_status',
-          expected: expectedStatus,
-          actual: shipment.shipment_status,
-        },
-      })
+      // REMOVED: pudo_scan_logs insert (tabla eliminada en migration 022)
 
       return errorResponse(400, `Estado inválido: se esperaba '${expectedStatus}', pero el paquete está en '${shipment.shipment_status}'`)
     }
@@ -355,25 +323,7 @@ serve(async (req: Request) => {
       console.error('[UPDATE] ❌ Failed to update shipment:', updateErr.message)
       console.error('[UPDATE] ❌ Error details:', updateErr)
       
-      // Registrar error
-      await cloudSupabase.from('pudo_scan_logs').insert({
-        pudo_location_id: ownerLocation.id,
-        remote_shipment_id: shipment.id,
-        previous_status: 'in_transit_pudo',
-        new_status: 'update_failed',
-        scanned_by_user_id: ownerUser.id,
-        action_type: 'delivery_confirmation',
-        api_request_successful: false,
-        api_response_code: 500,
-        api_response_message: `Failed to update shipment: ${updateErr.message}`,
-        api_request_duration_ms: Date.now() - startTime,
-        metadata: {
-          scanned_code,
-          shipment_id: shipment.id,
-          error: 'update_failed',
-          error_details: updateErr,
-        },
-      })
+      // REMOVED: pudo_scan_logs insert (tabla eliminada en migration 022)
 
       return errorResponse(500, `Error al actualizar shipment: ${updateErr.message}`)
     }
@@ -400,27 +350,7 @@ serve(async (req: Request) => {
       console.error('[UPDATE] ❌ Update verification failed!')
       console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedData.shipment_status)
       
-      // Registrar fallo de verificación
-      await cloudSupabase.from('pudo_scan_logs').insert({
-        pudo_location_id: ownerLocation.id,
-        remote_shipment_id: shipment.id,
-        previous_status: shipment.shipment_status,
-        new_status: 'verification_failed',
-        scanned_by_user_id: ownerUser.id,
-        action_type: actionType,
-        api_request_successful: false,
-        api_response_code: 500,
-        api_response_message: `Update verification failed: status is ${verifiedData.shipment_status}`,
-        api_request_duration_ms: Date.now() - startTime,
-        metadata: {
-          scanned_code,
-          shipment_id: shipment.id,
-          operation_type: operationType,
-          error: 'verification_failed',
-          expected_status: newStatus,
-          actual_status: verifiedData.shipment_status,
-        },
-      })
+      // REMOVED: pudo_scan_logs insert (tabla eliminada en migration 022)
 
       return errorResponse(500, 'La actualización del shipment no se pudo verificar')
     }
@@ -451,12 +381,19 @@ serve(async (req: Request) => {
     // 8. REGISTRAR EN BD CLOUD - packages
     // ─────────────────────────────────────────────────
     console.log('[CLOUD] Creating package record...')
+    console.log('[CLOUD] Package status mapping:', {
+      operation_type: operationType,
+      shipment_previous_status: shipment.shipment_status,
+      shipment_new_status: newStatus,
+      package_status: packageStatus,
+    })
+    
     const { data: newPackage, error: packageErr } = await cloudSupabase
       .from('packages')
       .insert({
         tracking_code: scanned_code,
         type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
-        status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
+        status: packageStatus,
         location_id: ownerLocation.id,
         source_system: 'brickshare',
         external_shipment_id: shipment.id,
@@ -508,50 +445,12 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────
-    // 10. REGISTRAR EN BD CLOUD - pudo_scan_logs
+    // 10. REMOVED: pudo_scan_logs registration
+    // La tabla pudo_scan_logs fue eliminada en migration 022
+    // Los logs ahora se registran solo en package_events
     // ─────────────────────────────────────────────────
     const duration = Date.now() - startTime
-    
-    console.log('[CLOUD] Creating scan log via direct insert...')
-    const { error: logErr } = await cloudSupabase
-      .from('pudo_scan_logs')
-      .insert({
-        pudo_location_id: ownerLocation.id,
-        remote_shipment_id: shipment.id,
-        previous_status: shipment.shipment_status,
-        new_status: newStatus,
-        scanned_by_user_id: ownerUser.id,
-        action_type: actionType,
-        scan_latitude: gps_latitude || null,
-        scan_longitude: gps_longitude || null,
-        gps_accuracy_meters: gps_accuracy || null,
-        gps_validation_passed: gps_latitude && gps_longitude ? true : false,
-        device_info: 'Mobile App',
-        app_version: '1.0.0',
-        api_request_successful: true,
-        api_response_code: 200,
-        api_response_message: `Shipment successfully ${operationType === 'dropoff' ? 'received at PUDO' : 'delivered to customer'}`,
-        api_request_duration_ms: duration,
-        metadata: {
-          scanned_code,
-          shipment_id: shipment.id,
-          tracking_number: shipment.tracking_number,
-          package_id: newPackage?.id,
-          operation_type: operationType,
-          local_db_updated: true,
-          cloud_db_updated: !!newPackage,
-        },
-      })
-    
-    if (logErr) {
-      console.error('[CLOUD] ❌ Failed to create scan log:', logErr.message)
-      console.error('[CLOUD] ❌ Error code:', logErr.code)
-      console.error('[CLOUD] ❌ Error details:', logErr.details)
-      console.error('[CLOUD] ❌ Full error:', JSON.stringify(logErr, null, 2))
-      return errorResponse(500, `Error registering scan log: ${logErr.message}`)
-    }
-    
-    console.log('[CLOUD] ✓ Scan log created successfully')
+    console.log('[CLOUD] ℹ️ Scan logging skipped (pudo_scan_logs removed)')
 
     // ─────────────────────────────────────────────────
     // 11. RETORNAR RESPUESTA EXITOSA
@@ -569,7 +468,7 @@ serve(async (req: Request) => {
           id: newPackage?.id,
           tracking_code: scanned_code,
           tracking_number: shipment.tracking_number,
-          status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
+          status: packageStatus,
           type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
           location: {
             id: ownerLocation.id,

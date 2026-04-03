@@ -63,30 +63,7 @@ export type Database = {
         Insert: { id?: string; tracking_code: string; type?: 'delivery' | 'return'; status?: 'pending_dropoff' | 'in_location' | 'picked_up' | 'returned'; location_id: string; customer_id?: string | null; dynamic_qr_hash?: string | null; static_qr_hash?: string | null; qr_expires_at?: string | null; external_shipment_id?: string | null; source_system?: string | null; received_at?: string | null; picked_up_at?: string | null; remote_shipment_data?: any | null; created_at?: string; updated_at?: string }
         Update: { id?: string; tracking_code?: string; type?: 'delivery' | 'return'; status?: 'pending_dropoff' | 'in_location' | 'picked_up' | 'returned'; location_id?: string; customer_id?: string | null; dynamic_qr_hash?: string | null; static_qr_hash?: string | null; qr_expires_at?: string | null; external_shipment_id?: string | null; source_system?: string | null; received_at?: string | null; picked_up_at?: string | null; remote_shipment_data?: any | null; created_at?: string; updated_at?: string }
       }
-      pudo_scan_logs: {
-        Row: {
-          id: string
-          pudo_location_id: string
-          remote_shipment_id: string
-          previous_status: string
-          new_status: string
-          scanned_by_user_id: string
-          action_type: 'delivery_confirmation' | 'return_confirmation'
-          scan_timestamp: string
-          scan_latitude: number | null
-          scan_longitude: number | null
-          gps_accuracy_meters: number | null
-          gps_validation_passed: boolean
-          api_request_successful: boolean
-          api_response_code: number | null
-          api_response_message: string | null
-          api_request_duration_ms: number | null
-          metadata: any | null
-          created_at: string
-        }
-        Insert: { id?: string; pudo_location_id: string; remote_shipment_id: string; previous_status: string; new_status: string; scanned_by_user_id: string; action_type: 'delivery_confirmation' | 'return_confirmation'; scan_timestamp?: string; scan_latitude?: number | null; scan_longitude?: number | null; gps_accuracy_meters?: number | null; gps_validation_passed?: boolean; api_request_successful?: boolean; api_response_code?: number | null; api_response_message?: string | null; api_request_duration_ms?: number | null; metadata?: any | null; created_at?: string }
-        Update: { id?: string; pudo_location_id?: string; remote_shipment_id?: string; previous_status?: string; new_status?: string; scanned_by_user_id?: string; action_type?: 'delivery_confirmation' | 'return_confirmation'; scan_timestamp?: string; scan_latitude?: number | null; scan_longitude?: number | null; gps_accuracy_meters?: number | null; gps_validation_passed?: boolean; api_request_successful?: boolean; api_response_code?: number | null; api_response_message?: string | null; api_request_duration_ms?: number | null; metadata?: any | null; created_at?: string }
-      }
+      // REMOVED: pudo_scan_logs table (eliminada en migration 022)
       package_events: {
         Row: { id: string; package_id: string; event_type: string; old_status: string | null; new_status: string; performed_by: string | null; location_id: string | null; metadata: any | null; created_at: string }
         Insert: { id?: string; package_id: string; event_type: string; old_status?: string | null; new_status: string; performed_by?: string | null; location_id?: string | null; metadata?: any | null; created_at?: string }

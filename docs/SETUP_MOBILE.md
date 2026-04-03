@@ -1,6 +1,57 @@
 # 📱 Guía de Setup Mobile — Brickshare PUDO
 
-## Arquitectura
+## 🏗️ Arquitectura Dual Database
+
+La aplicación móvil trabaja con **dos bases de datos Supabase** simultáneamente:
+
+### **DB1 (Brickshare_logistics)** - Cloud Supabase
+- 🌐 **URL:** `https://qumjzvhtotcvnzpjgjkl.supabase.co`
+- 🔐 **Propósito:** Autenticación de operadores PUDO + Registro de auditoría
+- 📦 **Variables:** `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+- 🔑 **Cliente:** `supabase` (exportado desde `@brickshare/shared`)
+
+### **DB2 (Brickshare)** - Local Database vía ngrok
+- 🏠 **URL:** `https://semblably-dizzied-bruno.ngrok-free.dev` (túnel temporal)
+- 📦 **Propósito:** Gestión de envíos, QR codes, clientes finales
+- 📊 **Variables:** `EXPO_PUBLIC_LOCAL_SUPABASE_URL`, `EXPO_PUBLIC_LOCAL_SUPABASE_ANON_KEY`
+- 🔑 **Cliente:** `supabaseLocal` (exportado desde `@brickshare/shared`)
+
+### 🔄 Flujo de Operación en la App
+
+```
+┌──────────────────────┐
+│  LoginScreen.tsx     │ 1. Usuario ingresa credenciales
+│                      │ 2. Autentica con DB1 (Cloud)
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  ScannerScreen.tsx   │ 3. Operador escanea QR code
+│                      │ 4. Captura GPS (lat, lon, accuracy)
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  pudoService.ts      │ 5. Invoca Edge Function en DB1
+│  processPudoScan()   │    con JWT token del usuario
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  DB1 Edge Function   │ 6. Valida operador y ubicación
+│  process-pudo-scan   │ 7. Conecta a DB2 vía ngrok
+└──────────┬───────────┘    8. Busca y actualiza shipment
+           │                9. Registra log en DB1
+           ▼
+┌──────────────────────┐
+│  ScannerScreen.tsx   │ 10. Muestra resultado al operador
+│  Feedback UI         │ 11. Log detallado en consola
+└──────────────────────┘
+```
+
+**⚠️ Dependencia crítica:** El túnel ngrok debe estar activo para que DB2 sea accesible desde la Edge Function desplegada en DB1 Cloud.
+
+## Arquitectura de la App
 
 El monorepo utiliza **una sola app mobile** (`apps/mobile/`) que genera builds separados para **iOS** y **Android**. El código fuente es 100% compartido entre ambas plataformas.
 
@@ -67,8 +118,46 @@ npm install
 # Copiar el ejemplo
 cp apps/mobile/.env.example apps/mobile/.env.local
 
-# Editar con tus credenciales de Supabase
+# Editar con tus credenciales
 nano apps/mobile/.env.local
+```
+
+**Variables requeridas:**
+```bash
+# ═══════════════════════════════════════════════════════════
+# DB1 - CLOUD (Brickshare_logistics)
+# Autenticación y logs de auditoría
+# ═══════════════════════════════════════════════════════════
+EXPO_PUBLIC_SUPABASE_URL=https://qumjzvhtotcvnzpjgjkl.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# ═══════════════════════════════════════════════════════════
+# DB2 - LOCAL (Brickshare) vía ngrok
+# Gestión de shipments y QR codes
+# ═══════════════════════════════════════════════════════════
+EXPO_PUBLIC_LOCAL_SUPABASE_URL=https://semblably-dizzied-bruno.ngrok-free.dev
+EXPO_PUBLIC_LOCAL_SUPABASE_ANON_KEY=sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz
+
+# ═══════════════════════════════════════════════════════════
+# DEV MODE (opcional)
+# ═══════════════════════════════════════════════════════════
+EXPO_PUBLIC_DEV_MODE=true  # Bypass JWT validation para testing
+```
+
+**🔄 Actualizar URL de ngrok:**
+
+ngrok genera una nueva URL cada vez que se reinicia (plan gratuito). Para actualizar:
+
+```bash
+# 1. Relanzar ngrok en la máquina con DB2 local
+ngrok http 54321
+
+# 2. Copiar la nueva URL (ej: https://nueva-url.ngrok-free.dev)
+
+# 3. Actualizar en apps/mobile/.env.local
+EXPO_PUBLIC_LOCAL_SUPABASE_URL=https://nueva-url.ngrok-free.dev
+
+# 4. Reiniciar la app móvil para cargar la nueva configuración
 ```
 
 ### 3. Verificar la configuración
@@ -283,6 +372,57 @@ const scanSize = cameraConfig.scanAreaSize; // Ajustado por plataforma
 ---
 
 ## Troubleshooting
+
+### "Edge Function returned a non-2xx status code"
+
+**Síntoma:** Error al escanear QR codes, la app no puede procesar los envíos
+
+**Causas más comunes:**
+
+1. **Túnel ngrok caído o expirado**
+   ```bash
+   # Verificar si ngrok está activo
+   curl https://semblably-dizzied-bruno.ngrok-free.dev/health
+   
+   # Si falla, reiniciar ngrok (en la máquina con DB2)
+   ngrok http 54321
+   ```
+
+2. **URL de ngrok desactualizada en .env.local**
+   - ngrok genera una nueva URL cada reinicio (plan free)
+   - Actualizar `EXPO_PUBLIC_LOCAL_SUPABASE_URL` con la nueva URL
+   - Reiniciar la app móvil: `npm run android` o `npm run ios`
+
+3. **DB2 local no está corriendo**
+   ```bash
+   # Verificar que Supabase local esté activo
+   docker ps | grep supabase
+   
+   # Si no está corriendo, iniciar
+   cd /ruta/a/db2
+   supabase start
+   ```
+
+4. **Edge Function no puede alcanzar ngrok desde Supabase Cloud**
+   - El contenedor Docker de Supabase Cloud debe poder acceder a ngrok
+   - Verificar logs de la Edge Function en Supabase Dashboard
+   - Considerar usar ngrok pro ($8/mes) para URL estática
+
+**Solución paso a paso:**
+```bash
+# 1. Verificar que DB2 local esté corriendo
+supabase status
+
+# 2. Relanzar ngrok
+ngrok http 54321
+
+# 3. Actualizar apps/mobile/.env.local con nueva URL
+
+# 4. Limpiar y reiniciar app
+cd apps/mobile
+rm -rf node_modules/.cache
+npx expo start --clear
+```
 
 ### "Metro bundler failed to start"
 ```bash

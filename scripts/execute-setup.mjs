@@ -98,12 +98,13 @@ async function runSetup() {
       .from('packages')
       .select('*', { count: 'exact', head: true });
     
-    const { count: logsCount } = await supabase
-      .from('pudo_scan_logs')
+    const { count: eventsCount } = await supabase
+      .from('package_events')
       .select('*', { count: 'exact', head: true });
-    
     console.log(`   - packages: ${packagesCount || 0} registros`);
-    console.log(`   - pudo_scan_logs: ${logsCount || 0} registros`);
+
+    console.log(`   - package_events: ${eventsCount || 0} registros`);
+    console.log(`   ⚠️  NOTA: pudo_scan_logs eliminada en migration 022`);
     console.log('');
     
     console.log('═══════════════════════════════════════════════════════════');
