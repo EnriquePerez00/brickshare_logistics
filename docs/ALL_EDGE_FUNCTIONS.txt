@@ -1,0 +1,1600 @@
+# ============================================================
+# TODAS LAS EDGE FUNCTIONS - PARA COPIAR AL DASHBOARD
+# ============================================================
+# 
+# Instrucciones:
+# 1. Para cada función, copia el contenido entre los marcadores
+# 2. Ve al Dashboard: https://app.supabase.com/project/qumjzvhtotcvnzpjgjkl/functions
+# 3. Abre la función correspondiente
+# 4. Reemplaza TODO el código
+# 5. Click en Deploy
+#
+# ============================================================
+
+FUNCIÓN 1: process-pudo-scan
+────────────────────────────
+// ============================================================
+// process-pudo-scan — Supabase Edge Function (Deno)
+//
+// ARQUITECTURA DUAL DATABASE:
+// - BD LOCAL (Brickshare via ngrok): Validación de shipments
+// - BD CLOUD (Logistics): Registro de logs y eventos
+//
+// Flujo:
+//   1. Autenticar operador PUDO (Cloud)
+//   2. Validar QR en shipments.delivery_qr_code (Local via ngrok)
+//   3. Verificar shipment_status = 'in_transit_pudo' (Local)
+//   4. Actualizar shipment_status = 'delivered_pudo' (Local)
+//   5. Registrar en packages, package_events, pudo_scan_logs (Cloud)
+//
+// POST /functions/v1/process-pudo-scan
+// Headers: Authorization: Bearer <OWNER_JWT>
+// Body: {
+//   "scanned_code": "BS-DEL-714C3F3D-FFD",
+//   "scan_mode": "dropoff",
+//   "gps_latitude": 40.4168,
+//   "gps_longitude": -3.7038,
+//   "gps_accuracy": 10.5
+// }
+// ============================================================
+
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+// ─────────────────────────────────────────────────
+// CONFIGURACIÓN DE BASES DE DATOS
+// ─────────────────────────────────────────────────
+// BD CLOUD (Logistics) - Para auth y logs
+const CLOUD_SUPABASE_URL = Deno.env.get('bricklogistics_URL') || 'https://qumjzvhtotcvnzpjgjkl.supabase.co'
+const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
+const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('bricklogistics_SERVICE_ROLE_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF1bWp6dmh0b3Rjdm56cGpnamtsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzk0NjYzMCwiZXhwIjoyMDg5NTIyNjMwfQ.qFhuNtT7jw5TrvJSzg28GiYVPQGLMSJ9JYeWhMDb_4o'
+
+// BD LOCAL (Brickshare via ngrok) - Para validar y actualizar shipments
+// Usar host.docker.internal para acceder al host desde dentro del contenedor Docker
+const LOCAL_DB_URL = Deno.env.get('brickshare_API_URL') || 'http://host.docker.internal:54331'
+const LOCAL_DB_KEY = Deno.env.get('brickshare_SERVICE_ROLE_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU'
+
+console.log('[STARTUP] ===== DUAL DATABASE CONFIGURATION =====')
+console.log('[STARTUP] CLOUD DB (Logistics):', CLOUD_SUPABASE_URL)
+console.log('[STARTUP] LOCAL DB (Brickshare):', LOCAL_DB_URL || 'NOT SET')
+console.log('[STARTUP] DEV_MODE:', Deno.env.get('DEV_MODE') || 'false')
+console.log('[STARTUP] ============================================')
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+function validateEnv() {
+  const devMode = Deno.env.get('DEV_MODE') === 'true'
+  
+  // In DEV_MODE, we allow missing config since we use hardcoded values
+  if (devMode) {
+    return { valid: true }
+  }
+  
+  const missing = []
+  
+  if (!CLOUD_SUPABASE_URL) missing.push('bricklogistics_URL')
+  if (!CLOUD_SUPABASE_SERVICE_ROLE) missing.push('bricklogistics_SERVICE_ROLE_KEY')
+  if (!LOCAL_DB_URL) missing.push('brickshare_API_URL')
+  if (!LOCAL_DB_KEY) missing.push('brickshare_SERVICE_ROLE_KEY')
+  
+  if (missing.length > 0) {
+    return { valid: false, message: `Missing configuration: ${missing.join(', ')}` }
+  }
+  
+  return { valid: true }
+}
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  const startTime = Date.now()
+  const envCheck = validateEnv()
+  if (!envCheck.valid) {
+    return errorResponse(500, envCheck.message!)
+  }
+
+  try {
+    // ─────────────────────────────────────────────────
+    // 1. AUTENTICACIÓN DEL OPERADOR PUDO (Cloud)
+    // ─────────────────────────────────────────────────
+    let authHeader = req.headers.get('X-Auth-Token') || req.headers.get('Authorization')
+    if (!authHeader) {
+      return errorResponse(401, 'ERR_AUTH_MISSING: Missing Authorization header')
+    }
+
+    const bearerToken = authHeader.replace('Bearer ', '')
+    const devMode = Deno.env.get('DEV_MODE') === 'true'
+    
+    let ownerUser: any = null
+
+    if (devMode) {
+      console.log('[AUTH] ⚠️ DEV MODE: Bypassing JWT validation')
+      ownerUser = {
+        id: 'dev-user-id',
+        email: 'dev@example.com',
+      }
+    } else {
+      // Decodificar JWT
+      try {
+        const jwtParts = bearerToken.split('.')
+        if (jwtParts.length !== 3) {
+          return errorResponse(401, 'ERR_AUTH_INVALID_JWT: Invalid JWT format')
+        }
+        
+        const payload = JSON.parse(atob(jwtParts[1]))
+        if (!payload.sub) {
+          return errorResponse(401, 'ERR_AUTH_MISSING_SUB: JWT missing sub claim')
+        }
+
+        ownerUser = {
+          id: payload.sub,
+          email: payload.email,
+          role: payload.role,
+        }
+        console.log('[AUTH] ✓ User authenticated:', ownerUser.email)
+      } catch (err: any) {
+        return errorResponse(401, `ERR_AUTH_JWT_DECODE: ${err.message}`)
+      }
+    }
+
+    // Inicializar clientes
+    const cloudSupabase = createClient(CLOUD_SUPABASE_URL, CLOUD_SUPABASE_SERVICE_ROLE)
+    const localSupabase = createClient(LOCAL_DB_URL, LOCAL_DB_KEY)
+
+    // ─────────────────────────────────────────────────
+    // 2. OBTENER UBICACIÓN DEL OPERADOR (Cloud)
+    // 
+    // NOTA: La validación se basa ÚNICAMENTE en user_locations.
+    // El rol del usuario NO importa para procesar escaneos PUDO.
+    // Solo se requiere que el usuario tenga una ubicación asignada en user_locations.
+    // ─────────────────────────────────────────────────
+    let ownerLocation: any
+
+    // Intentar cargar ubicación del usuario
+    const { data: userLocationData, error: locErr } = await cloudSupabase
+      .from('user_locations')
+      .select(`
+        location_id,
+        locations (
+          id,
+          name,
+          pudo_id,
+          address
+        )
+      `)
+      .eq('user_id', ownerUser.id)
+      .limit(1)
+      .single()
+
+    if (!locErr && userLocationData && userLocationData.locations) {
+      // Extraer location del JOIN
+      ownerLocation = Array.isArray(userLocationData.locations) 
+        ? userLocationData.locations[0] 
+        : userLocationData.locations
+      console.log('[LOCATION] ✓ Location found for user:', ownerLocation.name)
+    } else {
+      // Fallback: Si no hay ubicación para el usuario, cargar cualquier ubicación disponible
+      console.log('[LOCATION] ⚠️ No location for user, loading any available location...')
+      const { data: locations, error: anyLocErr } = await cloudSupabase
+        .from('locations')
+        .select('id, name, pudo_id, address')
+        .limit(1)
+      
+      if (anyLocErr || !locations || locations.length === 0) {
+        console.error('[LOCATION] ❌ No locations available in Cloud database')
+        return errorResponse(500, 'No locations available in Cloud database')
+      }
+      
+      ownerLocation = locations[0]
+      console.log('[LOCATION] ✓ Fallback location loaded:', ownerLocation.name)
+    }
+
+    // ─────────────────────────────────────────────────
+    // 3. LEER DATOS DEL BODY
+    // ─────────────────────────────────────────────────
+    const body = await req.json().catch(() => ({}))
+    const {
+      scanned_code,
+      scan_mode = 'dropoff',
+      gps_latitude,
+      gps_longitude,
+      gps_accuracy,
+    } = body
+
+    if (!scanned_code) {
+      return errorResponse(400, 'scanned_code is required')
+    }
+
+    console.log(`[SCAN] Mode: ${scan_mode}, Code: ${scanned_code}, Location: ${ownerLocation.pudo_id}`)
+
+    // ─────────────────────────────────────────────────
+    // 4. VALIDAR QR EN BD LOCAL (Brickshare)
+    // Buscar en delivery_qr_code Y pickup_qr_code
+    // ─────────────────────────────────────────────────
+    console.log('[VALIDATE] Checking QR codes in Local DB (delivery or pickup)...')
+    
+    const { data: shipment, error: shipmentErr } = await localSupabase
+      .from('shipments')
+      .select('id, delivery_qr_code, pickup_qr_code, return_qr_code, shipment_status, tracking_number, user_id, shipping_address, shipping_city')
+      .or(`delivery_qr_code.eq.${scanned_code},pickup_qr_code.eq.${scanned_code},return_qr_code.eq.${scanned_code}`)
+      .single()
+
+    if (shipmentErr || !shipment) {
+      console.error('[VALIDATE] ❌ QR not found in shipments table:', shipmentErr?.message)
+      
+      // Registrar intento fallido en Cloud
+      await cloudSupabase.from('pudo_scan_logs').insert({
+        pudo_location_id: ownerLocation.id,
+        remote_shipment_id: scanned_code,
+        previous_status: 'unknown',
+        new_status: 'validation_failed',
+        scanned_by_user_id: ownerUser.id,
+        action_type: 'delivery_validation',
+        api_request_successful: false,
+        api_response_code: 404,
+        api_response_message: 'QR code not found or wrong destination',
+        api_request_duration_ms: Date.now() - startTime,
+        metadata: {
+          scanned_code,
+          error: 'qr_not_found',
+          validation_failed: true,
+        },
+      })
+
+      return errorResponse(404, 'QR no válido o destino equivocado')
+    }
+
+    console.log('[VALIDATE] ✓ Shipment found:', {
+      id: shipment.id,
+      status: shipment.shipment_status,
+      tracking: shipment.tracking_number,
+    })
+
+    // ─────────────────────────────────────────────────
+    // 5. DETECTAR TIPO DE OPERACIÓN (DROPOFF vs PICKUP vs RETURN)
+    // ─────────────────────────────────────────────────
+    let operationType: 'dropoff' | 'pickup' | 'return'
+    let expectedStatus: string
+    let newStatus: string
+    let timestampField: string
+    let actionType: 'delivery_confirmation' | 'return_confirmation'
+
+    if (shipment.delivery_qr_code === scanned_code) {
+      // CASO 1: Recepción en PUDO
+      operationType = 'dropoff'
+      expectedStatus = 'in_transit_pudo'
+      newStatus = 'delivered_pudo'
+      timestampField = 'delivery_validated_at'
+      actionType = 'delivery_confirmation'
+      console.log('[VALIDATE] ✓ Operation: DROPOFF (delivery_qr_code matched)')
+    } else if (shipment.pickup_qr_code === scanned_code) {
+      // CASO 2: Entrega a cliente
+      operationType = 'pickup'
+      expectedStatus = 'delivered_pudo'
+      newStatus = 'delivered_user'
+      timestampField = 'pickup_validated_at'
+      actionType = 'delivery_confirmation'
+      console.log('[VALIDATE] ✓ Operation: PICKUP (pickup_qr_code matched)')
+    } else if (shipment.return_qr_code === scanned_code) {
+      // CASO 3: Devolución en PUDO
+      operationType = 'return'
+      expectedStatus = 'in_return_pudo'
+      newStatus = 'in_return'
+      timestampField = 'return_validated_at'
+      actionType = 'return_confirmation'
+      console.log('[VALIDATE] ✓ Operation: RETURN (return_qr_code matched)')
+    } else {
+      return errorResponse(400, 'QR code no coincide con ninguno de los códigos registrados')
+    }
+
+    // ─────────────────────────────────────────────────
+    // 6. VALIDAR ESTADO ESPERADO
+    // ─────────────────────────────────────────────────
+    if (shipment.shipment_status !== expectedStatus) {
+      console.error('[VALIDATE] ❌ Invalid status:', shipment.shipment_status)
+      
+      // Registrar intento fallido
+      await cloudSupabase.from('pudo_scan_logs').insert({
+        pudo_location_id: ownerLocation.id,
+        remote_shipment_id: shipment.id,
+        previous_status: shipment.shipment_status,
+        new_status: 'validation_failed',
+        scanned_by_user_id: ownerUser.id,
+        action_type: actionType,
+        api_request_successful: false,
+        api_response_code: 400,
+        api_response_message: `Invalid status: expected '${expectedStatus}', got '${shipment.shipment_status}'`,
+        api_request_duration_ms: Date.now() - startTime,
+        metadata: {
+          scanned_code,
+          operation_type: operationType,
+          error: 'invalid_status',
+          expected: expectedStatus,
+          actual: shipment.shipment_status,
+        },
+      })
+
+      return errorResponse(400, `Estado inválido: se esperaba '${expectedStatus}', pero el paquete está en '${shipment.shipment_status}'`)
+    }
+
+    console.log(`[VALIDATE] ✓ Status is correct: ${expectedStatus}`)
+
+    // ─────────────────────────────────────────────────
+    // 7. ACTUALIZAR SHIPMENT EN BD LOCAL CON TIMESTAMP
+    // ─────────────────────────────────────────────────
+    const now = new Date().toISOString()
+    
+    console.log('[UPDATE] Updating shipment in Local DB...')
+    console.log('[UPDATE] Target:', {
+      shipment_id: shipment.id,
+      current_status: shipment.shipment_status,
+      new_status: newStatus,
+      timestamp_field: timestampField,
+      operation_type: operationType,
+      db_url: LOCAL_DB_URL
+    })
+    
+    const updateData: any = {
+      shipment_status: newStatus,
+      updated_at: now,
+    }
+    updateData[timestampField] = now
+
+    const { error: updateErr } = await localSupabase
+      .from('shipments')
+      .update(updateData)
+      .eq('id', shipment.id)
+
+    if (updateErr) {
+      console.error('[UPDATE] ❌ Failed to update shipment:', updateErr.message)
+      console.error('[UPDATE] ❌ Error details:', updateErr)
+      
+      // Registrar error
+      await cloudSupabase.from('pudo_scan_logs').insert({
+        pudo_location_id: ownerLocation.id,
+        remote_shipment_id: shipment.id,
+        previous_status: 'in_transit_pudo',
+        new_status: 'update_failed',
+        scanned_by_user_id: ownerUser.id,
+        action_type: 'delivery_confirmation',
+        api_request_successful: false,
+        api_response_code: 500,
+        api_response_message: `Failed to update shipment: ${updateErr.message}`,
+        api_request_duration_ms: Date.now() - startTime,
+        metadata: {
+          scanned_code,
+          shipment_id: shipment.id,
+          error: 'update_failed',
+          error_details: updateErr,
+        },
+      })
+
+      return errorResponse(500, `Error al actualizar shipment: ${updateErr.message}`)
+    }
+
+    // Verificar que el UPDATE realmente se aplicó
+    console.log('[UPDATE] Verifying update...')
+    const { data: verifiedShipment, error: verifyErr } = await localSupabase
+      .from('shipments')
+      .select(`shipment_status, ${timestampField}`)
+      .eq('id', shipment.id)
+      .single()
+
+    if (verifyErr) {
+      console.error('[UPDATE] ❌ Failed to verify update:', verifyErr.message)
+      return errorResponse(500, 'Error al verificar actualización del shipment')
+    }
+
+    console.log('[UPDATE] ✓ Verification result:', verifiedShipment)
+
+    if (verifiedShipment.shipment_status !== newStatus) {
+      console.error('[UPDATE] ❌ Update verification failed!')
+      console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedShipment.shipment_status)
+      
+      // Registrar fallo de verificación
+      await cloudSupabase.from('pudo_scan_logs').insert({
+        pudo_location_id: ownerLocation.id,
+        remote_shipment_id: shipment.id,
+        previous_status: shipment.shipment_status,
+        new_status: 'verification_failed',
+        scanned_by_user_id: ownerUser.id,
+        action_type: actionType,
+        api_request_successful: false,
+        api_response_code: 500,
+        api_response_message: `Update verification failed: status is ${verifiedShipment.shipment_status}`,
+        api_request_duration_ms: Date.now() - startTime,
+        metadata: {
+          scanned_code,
+          shipment_id: shipment.id,
+          operation_type: operationType,
+          error: 'verification_failed',
+          expected_status: newStatus,
+          actual_status: verifiedShipment.shipment_status,
+        },
+      })
+
+      return errorResponse(500, 'La actualización del shipment no se pudo verificar')
+    }
+
+    console.log(`[UPDATE] ✓ Shipment successfully updated and verified to ${newStatus}`)
+
+    // ─────────────────────────────────────────────────
+    // 7.5 ACTUALIZAR USER_STATUS EN BD LOCAL (si aplica)
+    // Para operaciones PICKUP, actualizar users.user_status = 'received'
+    // ─────────────────────────────────────────────────
+    if (operationType === 'pickup' && newStatus === 'delivered_user') {
+      console.log('[UPDATE] Updating user status to "received"...')
+      const { error: userUpdateErr } = await localSupabase
+        .from('users')
+        .update({ user_status: 'received' })
+        .eq('id', shipment.user_id)
+
+      if (userUpdateErr) {
+        console.error('[UPDATE] ⚠️ Failed to update user status:', userUpdateErr.message)
+        console.error('[UPDATE] ⚠️ Error details:', userUpdateErr)
+        // No retornamos error, solo registramos la advertencia
+      } else {
+        console.log('[UPDATE] ✓ User status updated to "received"')
+      }
+    }
+
+    // ─────────────────────────────────────────────────
+    // 8. REGISTRAR EN BD CLOUD - packages
+    // ─────────────────────────────────────────────────
+    console.log('[CLOUD] Creating package record...')
+    const { data: newPackage, error: packageErr } = await cloudSupabase
+      .from('packages')
+      .insert({
+        tracking_code: scanned_code,
+        type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
+        status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
+        location_id: ownerLocation.id,
+        source_system: 'brickshare',
+        external_shipment_id: shipment.id,
+        received_at: operationType === 'dropoff' ? now : undefined,
+        picked_up_at: operationType === 'pickup' ? now : undefined,
+        returned_at: operationType === 'return' ? now : undefined,
+        remote_shipment_data: shipment,
+      })
+      .select()
+      .single()
+
+    if (packageErr) {
+      console.error('[CLOUD] ❌ Failed to create package:', packageErr.message)
+      // Continuamos, el shipment YA está actualizado en Local
+    } else {
+      console.log('[CLOUD] ✓ Package created:', newPackage.id)
+    }
+
+    // ─────────────────────────────────────────────────
+    // 9. REGISTRAR EN BD CLOUD - package_events
+    // ─────────────────────────────────────────────────
+    if (newPackage) {
+      try {
+        console.log('[CLOUD] Creating package event...')
+        const { error: eventErr } = await cloudSupabase.from('package_events').insert({
+          package_id: newPackage.id,
+          event_type: operationType,
+          old_status: shipment.shipment_status,
+          new_status: newStatus,
+          performed_by: ownerUser.id,
+          location_id: ownerLocation.id,
+          metadata: {
+            scanned_code,
+            shipment_id: shipment.id,
+            tracking_number: shipment.tracking_number,
+            operation_type: operationType,
+            source: 'pudo_scan',
+          },
+        })
+        
+        if (eventErr) {
+          console.error('[CLOUD] ⚠️ Failed to create event:', eventErr.message)
+        } else {
+          console.log('[CLOUD] ✓ Package event created')
+        }
+      } catch (eventErr: any) {
+        console.error('[CLOUD] ⚠️ Unexpected error creating event:', eventErr.message)
+      }
+    }
+
+    // ─────────────────────────────────────────────────
+    // 10. REGISTRAR EN BD CLOUD - pudo_scan_logs
+    // ─────────────────────────────────────────────────
+    const duration = Date.now() - startTime
+    
+    console.log('[CLOUD] Creating scan log via direct insert...')
+    const { error: logErr } = await cloudSupabase
+      .from('pudo_scan_logs')
+      .insert({
+        pudo_location_id: ownerLocation.id,
+        remote_shipment_id: shipment.id,
+        previous_status: shipment.shipment_status,
+        new_status: newStatus,
+        scanned_by_user_id: ownerUser.id,
+        action_type: actionType,
+        scan_latitude: gps_latitude || null,
+        scan_longitude: gps_longitude || null,
+        gps_accuracy_meters: gps_accuracy || null,
+        gps_validation_passed: gps_latitude && gps_longitude ? true : false,
+        device_info: 'Mobile App',
+        app_version: '1.0.0',
+        api_request_successful: true,
+        api_response_code: 200,
+        api_response_message: `Shipment successfully ${operationType === 'dropoff' ? 'received at PUDO' : 'delivered to customer'}`,
+        api_request_duration_ms: duration,
+        metadata: {
+          scanned_code,
+          shipment_id: shipment.id,
+          tracking_number: shipment.tracking_number,
+          package_id: newPackage?.id,
+          operation_type: operationType,
+          local_db_updated: true,
+          cloud_db_updated: !!newPackage,
+        },
+      })
+    
+    if (logErr) {
+      console.error('[CLOUD] ❌ Failed to create scan log:', logErr.message)
+      console.error('[CLOUD] ❌ Error code:', logErr.code)
+      console.error('[CLOUD] ❌ Error details:', logErr.details)
+      console.error('[CLOUD] ❌ Full error:', JSON.stringify(logErr, null, 2))
+      return errorResponse(500, `Error registering scan log: ${logErr.message}`)
+    }
+    
+    console.log('[CLOUD] ✓ Scan log created successfully')
+
+    // ─────────────────────────────────────────────────
+    // 11. RETORNAR RESPUESTA EXITOSA
+    // ─────────────────────────────────────────────────
+      return new Response(
+      JSON.stringify({
+        success: true,
+        operation_type: operationType,
+        message: operationType === 'dropoff' 
+          ? 'Paquete recepcionado exitosamente en PUDO'
+          : operationType === 'pickup'
+          ? 'Paquete entregado exitosamente al cliente'
+          : 'Paquete recibido para devolución',
+        package: {
+          id: newPackage?.id,
+          tracking_code: scanned_code,
+          tracking_number: shipment.tracking_number,
+          status: operationType === 'dropoff' ? 'in_location' : operationType === 'pickup' ? 'picked_up' : 'returned',
+          type: operationType === 'dropoff' ? 'delivery' : operationType === 'pickup' ? 'delivery' : 'return',
+          location: {
+            id: ownerLocation.id,
+            name: ownerLocation.name,
+            pudo_id: ownerLocation.pudo_id,
+            address: ownerLocation.address,
+          },
+          received_at: operationType === 'dropoff' ? now : undefined,
+          picked_up_at: operationType === 'pickup' ? now : undefined,
+          returned_at: operationType === 'return' ? now : undefined,
+        },
+        shipment: {
+          id: shipment.id,
+          previous_status: shipment.shipment_status,
+          new_status: newStatus,
+          updated_at: now,
+          customer_id: shipment.user_id,
+          delivery_address: shipment.shipping_address,
+        },
+        operator: {
+          id: ownerUser.id,
+          email: ownerUser.email,
+        },
+        timestamp: now,
+        duration_ms: duration,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    )
+  } catch (err: any) {
+    console.error('[ERROR] Unexpected error:', err)
+    return errorResponse(500, `Internal server error: ${err.message}`)
+  }
+})
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
+function errorResponse(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    }
+  )
+}
+
+# ============================================================
+FUNCIÓN 2: update-remote-shipment-status
+────────────────────────────────────────
+// ============================================================
+// update-remote-shipment-status — Supabase Edge Function (Deno)
+//
+// Actualiza el estado de un shipment en la base de datos remota
+// de Brickshare después de escanear QR en punto PUDO.
+//
+// Lógica:
+//   - Si shipping_status = "in_transit_pudo" → cambiar a "delivered_pudo"
+//   - Si shipping_status = "in_return_pudo" → cambiar a "in_return"
+//
+// POST /functions/v1/update-remote-shipment-status
+// Headers: Authorization: Bearer <OWNER_JWT>
+// Body: {
+//   "shipment_id": "uuid",
+//   "qr_data": "scanned_qr_content",
+//   "gps_latitude": 40.4168,
+//   "gps_longitude": -3.7038,
+//   "gps_accuracy": 10.5
+// }
+// ============================================================
+
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const SUPABASE_URL = Deno.env.get('SUPABASE_bricklogistics_URL')!
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
+const SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+const REMOTE_DB_URL = Deno.env.get('SUPABASE_brickshare_API_URL')! // URL de la BD remota de Brickshare
+const REMOTE_DB_KEY = Deno.env.get('SUPABASE_brickshare_SERVICE_ROLE_KEY')! // Service key de BD remota
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  const startTime = Date.now()
+
+  try {
+    // 1. Autenticar al owner del punto PUDO
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) return errorResponse(401, 'Missing Authorization header')
+
+    let ownerUser: any = null;
+    let authErrorMsg: string | null = null;
+
+    // A. Intentar validar el token localmente
+    const supabaseLocalAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    
+    const { data: localAuth, error: localAuthErr } = await supabaseLocalAuth.auth.getUser();
+    
+    if (localAuth?.user) {
+      ownerUser = localAuth.user;
+    } else {
+      // B. Si falla, intentar validar el token contra Producción (Dual DB)
+      const supabaseRemoteAuth = createClient(REMOTE_DB_URL, REMOTE_DB_KEY, {
+        global: { headers: { Authorization: authHeader } }
+      });
+      const { data: remoteAuth, error: remoteAuthErr } = await supabaseRemoteAuth.auth.getUser();
+      
+      if (remoteAuth?.user) {
+        ownerUser = remoteAuth.user;
+      } else {
+        authErrorMsg = remoteAuthErr?.message || localAuthErr?.message || 'Unknown auth error';
+      }
+    }
+
+    if (!ownerUser) {
+      return errorResponse(401, `Invalid or expired session: ${authErrorMsg}`)
+    }
+
+    // Inicializar cliente Admin Remoto para leer usuarios y localizaciones de la BD en la Nube
+    const supabaseRemoteAdmin = createClient(REMOTE_DB_URL, REMOTE_DB_KEY);
+
+    // Obtener ubicación PUDO asignada al usuario usando user_locations
+    const { data: userLocationData, error: locErr } = await supabaseRemoteAdmin
+      .from('user_locations')
+      .select(`
+        location_id,
+        locations (
+          id,
+          name,
+          latitude,
+          longitude,
+          gps_validation_radius_meters
+        )
+      `)
+      .eq('user_id', ownerUser.id)
+      .limit(1)
+      .single()
+
+    if (locErr || !userLocationData || !userLocationData.locations) {
+      return errorResponse(404, 'No PUDO location assigned to this user. Please contact administrator.')
+    }
+
+    // Extraer location del JOIN
+    const ownerLocation = Array.isArray(userLocationData.locations) 
+      ? userLocationData.locations[0] 
+      : userLocationData.locations
+
+    // 2. Leer datos del body
+    const body = await req.json().catch(() => ({}))
+    const {
+      shipment_id,
+      qr_data,
+      gps_latitude,
+      gps_longitude,
+      gps_accuracy,
+    } = body
+
+    if (!shipment_id) {
+      return errorResponse(400, 'shipment_id is required')
+    }
+
+    // 3. Validar GPS si está configurado
+    let gpsValidationPassed = false
+    let gpsValidationMessage = 'GPS validation not configured'
+
+    if (ownerLocation.latitude && ownerLocation.longitude && gps_latitude && gps_longitude) {
+      const distance = calculateDistance(
+        ownerLocation.latitude,
+        ownerLocation.longitude,
+        gps_latitude,
+        gps_longitude
+      )
+
+      const allowedRadius = ownerLocation.gps_validation_radius_meters || 50
+      gpsValidationPassed = distance <= allowedRadius
+
+      if (!gpsValidationPassed) {
+        gpsValidationMessage = `GPS validation failed: distance ${distance.toFixed(0)}m exceeds allowed radius ${allowedRadius}m`
+        // Registrar log de validación GPS fallida
+        await logPudoScan(
+          ownerLocation.id,
+          shipment_id,
+          'unknown',
+          'unknown',
+          'delivery_confirmation',
+          ownerUser.id,
+          gps_latitude,
+          gps_longitude,
+          gps_accuracy,
+          false,
+          400,
+          gpsValidationMessage,
+          0
+        )
+        return errorResponse(403, gpsValidationMessage)
+      }
+
+      gpsValidationMessage = `GPS validation passed: distance ${distance.toFixed(0)}m within radius ${allowedRadius}m`
+    }
+
+    // 4. Conectar a BD remota para obtener estado actual del shipment
+    const supabaseRemote = createClient(REMOTE_DB_URL, REMOTE_DB_KEY)
+
+    const { data: shipment, error: shipmentErr } = await supabaseRemote
+      .from('shipments')
+      .select('id, shipment_status')
+      .eq('id', shipment_id)
+      .single()
+
+    if (shipmentErr || !shipment) {
+      await logPudoScan(
+        ownerLocation.id,
+        shipment_id,
+        'unknown',
+        'unknown',
+        'delivery_confirmation',
+        ownerUser.id,
+        gps_latitude,
+        gps_longitude,
+        gps_accuracy,
+        false,
+        404,
+        'Shipment not found in remote database',
+        Date.now() - startTime
+      )
+      return errorResponse(404, 'Shipment not found in remote database')
+    }
+
+    const currentStatus = shipment.shipment_status
+
+    // 5. Determinar nuevo estado según lógica de negocio
+    let newStatus: string | null = null
+    let actionType: 'delivery_confirmation' | 'return_confirmation' = 'delivery_confirmation'
+
+    if (currentStatus === 'in_transit_pudo') {
+      newStatus = 'delivered_pudo'
+      actionType = 'delivery_confirmation'
+    } else if (currentStatus === 'in_return_pudo') {
+      newStatus = 'in_return'
+      actionType = 'return_confirmation'
+    } else {
+      // Estado no válido para operación PUDO
+      await logPudoScan(
+        ownerLocation.id,
+        shipment_id,
+        currentStatus,
+        currentStatus,
+        actionType,
+        ownerUser.id,
+        gps_latitude,
+        gps_longitude,
+        gps_accuracy,
+        false,
+        409,
+        `Invalid status for PUDO operation: ${currentStatus}`,
+        Date.now() - startTime
+      )
+      return errorResponse(
+        409,
+        `Invalid status for PUDO operation: ${currentStatus}. Expected in_transit_pudo or in_return_pudo.`
+      )
+    }
+
+    // 6. Actualizar columna shipment_status en tabla shipments de brickshare
+    const { error: updateErr } = await supabaseRemote
+      .from('shipments')
+      .update({
+        shipment_status: newStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', shipment_id)
+
+    if (updateErr) {
+      console.error('Remote DB update error:', updateErr)
+      await logPudoScan(
+        ownerLocation.id,
+        shipment_id,
+        currentStatus,
+        newStatus,
+        actionType,
+        ownerUser.id,
+        gps_latitude,
+        gps_longitude,
+        gps_accuracy,
+        false,
+        500,
+        `Failed to update remote database: ${updateErr.message}`,
+        Date.now() - startTime
+      )
+      return errorResponse(500, 'Failed to update shipment status in remote database')
+    }
+
+    // 7. Registrar log exitoso en tabla pudo_scan_logs
+    const duration = Date.now() - startTime
+    await logPudoScan(
+      ownerLocation.id,
+      shipment_id,
+      currentStatus,
+      newStatus,
+      actionType,
+      ownerUser.id,
+      gps_latitude,
+      gps_longitude,
+      gps_accuracy,
+      true,
+      200,
+      'Status updated successfully',
+      duration
+    )
+
+    // 8. Retornar confirmación
+    return new Response(
+      JSON.stringify({
+        success: true,
+        shipment_id: shipment_id,
+        previous_status: currentStatus,
+        new_status: newStatus,
+        action_type: actionType,
+        pudo_location: {
+          id: ownerLocation.id,
+          name: ownerLocation.name,
+        },
+        gps_validation: {
+          passed: gpsValidationPassed,
+          message: gpsValidationMessage,
+        },
+        timestamp: new Date().toISOString(),
+        duration_ms: duration,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    )
+  } catch (err) {
+    console.error('Unexpected error:', err)
+    return errorResponse(500, 'Internal server error')
+  }
+})
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
+function errorResponse(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    }
+  )
+}
+
+/**
+ * Calcula la distancia entre dos puntos GPS usando fórmula de Haversine
+ * Retorna distancia en metros
+ */
+function calculateDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371000 // Radio de la Tierra en metros
+  const φ1 = (lat1 * Math.PI) / 180
+  const φ2 = (lat2 * Math.PI) / 180
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2)
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+
+  return R * c
+}
+
+/**
+ * Hash simple de string para logging (no para seguridad)
+ */
+function hashString(str: string): string {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = (hash << 5) - hash + char
+    hash = hash & hash // Convert to 32-bit integer
+  }
+  return hash.toString(16)
+}
+
+/**
+ * Registra un escaneo en la tabla pudo_scan_logs usando admin client
+ */
+async function logPudoScan(
+  locationId: string,
+  shipmentId: string,
+  previousStatus: string,
+  newStatus: string,
+  actionType: 'delivery_confirmation' | 'return_confirmation',
+  userId: string,
+  latitude: number | null,
+  longitude: number | null,
+  accuracy: number | null,
+  success: boolean,
+  responseCode: number,
+  responseMessage: string,
+  durationMs: number
+): Promise<void> {
+  try {
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_bricklogistics_URL')!,
+      Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+    )
+
+    await supabaseAdmin.from('pudo_scan_logs').insert({
+      pudo_location_id: locationId,
+      remote_shipment_id: shipmentId,
+      previous_status: previousStatus,
+      new_status: newStatus,
+      scanned_by_user_id: userId,
+      action_type: actionType,
+      scan_latitude: latitude,
+      scan_longitude: longitude,
+      gps_accuracy_meters: accuracy,
+      gps_validation_passed: latitude !== null && longitude !== null,
+      api_request_successful: success,
+      api_response_code: responseCode,
+      api_response_message: responseMessage,
+      api_request_duration_ms: durationMs,
+      metadata: {
+        device_info: 'Mobile App',
+        app_version: '1.0.0',
+      }
+    })
+  } catch (err) {
+    console.error('Failed to log PUDO scan:', err)
+  }
+}
+
+# ============================================================
+FUNCIÓN 3: generate-dynamic-qr
+──────────────────────────────
+// ============================================================
+// generate-dynamic-qr — Supabase Edge Function (Deno)
+//
+// Genera un JWT firmado que el cliente muestra como QR.
+// Expira en 5 minutos. Guarda el hash en la tabla packages.
+//
+// POST /functions/v1/generate-dynamic-qr
+// Headers: Authorization: Bearer <CUSTOMER_JWT>
+// Body:    { "package_id": "uuid" }
+// ============================================================
+
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { create, getNumericDate } from 'https://deno.land/x/djwt@v3.0.2/mod.ts'
+
+const SUPABASE_URL      = Deno.env.get('SUPABASE_bricklogistics_URL')!
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
+const JWT_SECRET        = Deno.env.get('QR_JWT_SECRET_bricklogistics')!  // Secret específico para QRs
+const QR_TTL_SECONDS    = 5 * 60  // 5 minutos
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req: Request) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // 1. Autenticar al usuario (customer) via su JWT de Supabase
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      return errorResponse(401, 'Missing Authorization header')
+    }
+
+    // Crear cliente con el JWT del usuario para respetar RLS
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    })
+
+    // Verificar sesión y obtener usuario
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return errorResponse(401, 'Invalid or expired session')
+    }
+
+    // 2. Leer y validar el body
+    const body = await req.json().catch(() => ({}))
+    const packageId: string = body?.package_id
+
+    if (!packageId || typeof packageId !== 'string') {
+      return errorResponse(400, 'package_id is required')
+    }
+
+    // 3. Verificar que el paquete pertenece al customer y está listo para recogida
+    const { data: pkg, error: pkgError } = await supabase
+      .from('packages')
+      .select('id, type, status, customer_id, location_id, external_shipment_id, source_system')
+      .eq('id', packageId)
+      .single()
+
+    if (pkgError || !pkg) {
+      return errorResponse(404, 'Package not found or access denied')
+    }
+
+    // Validar que es un package de delivery (no return)
+    if (pkg.type !== 'delivery') {
+      return errorResponse(400, 'This function is only for delivery packages. Use generate-static-return-qr for returns.')
+    }
+
+    if (pkg.customer_id !== user.id) {
+      return errorResponse(403, 'This package does not belong to you')
+    }
+
+    if (pkg.status !== 'in_location') {
+      return errorResponse(409, `Package is not ready for pickup. Current status: ${pkg.status}`)
+    }
+
+    // 4. Generar el JWT de QR con HMAC-SHA256
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign', 'verify'],
+    )
+
+    const now        = Math.floor(Date.now() / 1000)
+    const expiresAt  = now + QR_TTL_SECONDS
+
+    const qrJwt = await create(
+      { alg: 'HS256', typ: 'JWT' },
+      {
+        sub:                user.id,
+        package_id:         packageId,
+        location_id:        pkg.location_id,
+        type:               'delivery',
+        external_shipment_id: pkg.external_shipment_id,
+        source_system:      pkg.source_system,
+        iat:                now,
+        exp:                getNumericDate(QR_TTL_SECONDS),
+      },
+      key,
+    )
+
+    // 5. Guardar el hash y la expiración en la BD
+    // Usamos admin client para poder actualizar (el customer solo tiene SELECT en su paquete)
+    const supabaseAdmin = createClient(
+      SUPABASE_URL,
+      Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!,
+    )
+
+    const { error: updateError } = await supabaseAdmin
+      .from('packages')
+      .update({
+        dynamic_qr_hash: qrJwt,
+        qr_expires_at:   new Date(expiresAt * 1000).toISOString(),
+      })
+      .eq('id', packageId)
+
+    if (updateError) {
+      console.error('DB update error:', updateError)
+      return errorResponse(500, 'Failed to store QR hash')
+    }
+
+    // 6. Responder con el QR y su expiración
+    return new Response(
+      JSON.stringify({
+        qr_hash:             qrJwt,
+        type:                'delivery',
+        expires_at:          new Date(expiresAt * 1000).toISOString(),
+        package_id:          packageId,
+        location_id:         pkg.location_id,
+        external_shipment_id: pkg.external_shipment_id,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
+  } catch (err) {
+    console.error('Unexpected error:', err)
+    return errorResponse(500, 'Internal server error')
+  }
+})
+
+function errorResponse(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    },
+  )
+}
+
+
+# ============================================================
+FUNCIÓN 4: generate-static-return-qr
+─────────────────────────────────────
+// ============================================================
+// generate-static-return-qr — Supabase Edge Function (Deno)
+//
+// Genera un JWT firmado estático para devoluciones.
+// A diferencia del QR dinámico, este NO expira temporalmente.
+// Solo se invalida cuando se escanea o se cancela la devolución.
+//
+// POST /functions/v1/generate-static-return-qr
+// Headers: Authorization: Bearer <CUSTOMER_JWT> o <SERVICE_ROLE_KEY>
+// Body:    { "package_id": "uuid" }
+// ============================================================
+
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { create } from 'https://deno.land/x/djwt@v3.0.2/mod.ts'
+
+const SUPABASE_URL      = Deno.env.get('SUPABASE_bricklogistics_URL')!
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
+const JWT_SECRET        = Deno.env.get('QR_JWT_SECRET_bricklogistics')!  // Secret específico para QRs
+const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req: Request) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // 1. Autenticar - puede ser customer o service role (para integración)
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      return errorResponse(401, 'Missing Authorization header')
+    }
+
+    const isServiceRole = authHeader.includes(SERVICE_ROLE_KEY)
+    
+    // Crear cliente con el JWT apropiado
+    const supabase = createClient(
+      SUPABASE_URL, 
+      isServiceRole ? SERVICE_ROLE_KEY : SUPABASE_ANON_KEY,
+      {
+        global: { headers: { Authorization: authHeader } },
+      }
+    )
+
+    let userId: string | null = null
+
+    if (!isServiceRole) {
+      // Si no es service role, obtener usuario del JWT
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      if (authError || !user) {
+        return errorResponse(401, 'Invalid or expired session')
+      }
+      userId = user.id
+    }
+
+    // 2. Leer y validar el body
+    const body = await req.json().catch(() => ({}))
+    const packageId: string = body?.package_id
+
+    if (!packageId || typeof packageId !== 'string') {
+      return errorResponse(400, 'package_id is required')
+    }
+
+    // 3. Admin client para leer sin restricciones
+    const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+
+    // Verificar que el paquete existe y es de tipo 'return'
+    const { data: pkg, error: pkgError } = await supabaseAdmin
+      .from('packages')
+      .select('id, type, status, customer_id, location_id, external_shipment_id, source_system')
+      .eq('id', packageId)
+      .single()
+
+    if (pkgError || !pkg) {
+      return errorResponse(404, 'Package not found')
+    }
+
+    // Validar que es un package de devolución
+    if (pkg.type !== 'return') {
+      return errorResponse(400, 'This function is only for return packages. Use generate-dynamic-qr for deliveries.')
+    }
+
+    // Si no es service role, validar que el paquete pertenece al usuario
+    if (!isServiceRole && userId && pkg.customer_id !== userId) {
+      return errorResponse(403, 'This package does not belong to you')
+    }
+
+    // Validar estado - solo pending_dropoff puede generar QR de devolución
+    if (pkg.status !== 'pending_dropoff') {
+      return errorResponse(409, `Cannot generate return QR. Package status: ${pkg.status}`)
+    }
+
+    // 4. Generar el JWT de QR con HMAC-SHA256
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign', 'verify'],
+    )
+
+    const now = Math.floor(Date.now() / 1000)
+
+    // Para returns, no ponemos exp (expiration) ya que no expira temporalmente
+    // Se invalida solo cuando se escanea
+    const qrJwt = await create(
+      { alg: 'HS256', typ: 'JWT' },
+      {
+        sub:                pkg.customer_id || 'anonymous',
+        package_id:         packageId,
+        location_id:        pkg.location_id,
+        type:               'return',
+        external_shipment_id: pkg.external_shipment_id,
+        source_system:      pkg.source_system,
+        iat:                now,
+        // NO incluir exp - este QR no expira temporalmente
+      },
+      key,
+    )
+
+    // 5. Guardar el hash estático en la BD
+    const { error: updateError } = await supabaseAdmin
+      .from('packages')
+      .update({
+        static_qr_hash: qrJwt,
+      })
+      .eq('id', packageId)
+
+    if (updateError) {
+      console.error('DB update error:', updateError)
+      return errorResponse(500, 'Failed to store static QR hash')
+    }
+
+    // 6. Responder con el QR estático
+    return new Response(
+      JSON.stringify({
+        qr_hash:             qrJwt,
+        type:                'return',
+        package_id:          packageId,
+        location_id:         pkg.location_id,
+        external_shipment_id: pkg.external_shipment_id,
+        expires:             false, // No expira temporalmente
+        created_at:          new Date(now * 1000).toISOString(),
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
+  } catch (err) {
+    console.error('Unexpected error:', err)
+    return errorResponse(500, 'Internal server error')
+  }
+})
+
+function errorResponse(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    },
+  )
+}
+
+# ============================================================
+FUNCIÓN 5: verify-package-qr
+─────────────────────────────
+// ============================================================
+// verify-package-qr — Supabase Edge Function (Deno)
+//
+// El owner escanea el QR del cliente. Esta función:
+//   1. Verifica la firma del JWT
+//   2. Para QR dinámicos: verifica que no ha expirado
+//   3. Verifica que el paquete pertenece al local del owner
+//   4. Actualiza el status según el tipo:
+//      - delivery: in_location → picked_up
+//      - return: pending_dropoff → in_location
+//   5. Notifica a sistema externo si corresponde
+//
+// POST /functions/v1/verify-package-qr
+// Headers: Authorization: Bearer <OWNER_JWT>
+// Body:    { "qr_hash": "eyJ..." }
+// ============================================================
+
+import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { verify } from 'https://deno.land/x/djwt@v3.0.2/mod.ts'
+
+const SUPABASE_URL           = Deno.env.get('SUPABASE_bricklogistics_URL')!
+const SUPABASE_ANON_KEY      = Deno.env.get('SUPABASE_bricklogistics_ANON_KEY')!
+const SUPABASE_SERVICE_ROLE  = Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
+const JWT_SECRET             = Deno.env.get('QR_JWT_SECRET_bricklogistics')!
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // 1. Autenticar al owner
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) return errorResponse(401, 'Missing Authorization header')
+
+    const supabaseOwner = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    })
+
+    const { data: { user: ownerUser }, error: authErr } = await supabaseOwner.auth.getUser()
+    if (authErr || !ownerUser) return errorResponse(401, 'Invalid or expired session')
+
+    // Verificar que el usuario tiene rol 'owner'
+    const { data: ownerProfile } = await supabaseOwner
+      .from('users')
+      .select('role')
+      .eq('id', ownerUser.id)
+      .single()
+
+    if (!ownerProfile || ownerProfile.role !== 'owner') {
+      return errorResponse(403, 'Only owners can verify package QR codes')
+    }
+
+    // 2. Leer el QR del body
+    const body = await req.json().catch(() => ({}))
+    const qrHash: string = body?.qr_hash
+
+    if (!qrHash || typeof qrHash !== 'string') {
+      return errorResponse(400, 'qr_hash is required')
+    }
+
+    // 3. Verificar la firma y expiración del JWT
+    //    djwt lanza error si la firma es inválida o el token ha expirado
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign', 'verify'],
+    )
+
+    let payload: Record<string, unknown>
+    try {
+      payload = await verify(qrHash, key) as Record<string, unknown>
+    } catch (_err) {
+      return errorResponse(401, 'QR code is invalid or has expired')
+    }
+
+    const packageId  = payload.package_id as string
+    const locationId = payload.location_id as string
+    const qrType     = (payload.type as string) || 'delivery' // Para compatibilidad con QRs antiguos
+    const externalShipmentId = payload.external_shipment_id as string | undefined
+    const sourceSystem = (payload.source_system as string) || 'logistics'
+
+    if (!packageId || !locationId) {
+      return errorResponse(400, 'Malformed QR payload')
+    }
+
+    // 4. Admin client para leer sin restricciones de RLS y luego actualizar
+    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
+
+    // Verificar que el paquete existe y obtener su información
+    const { data: pkg, error: pkgErr } = await supabaseAdmin
+      .from('packages')
+      .select('id, type, status, tracking_code, location_id, external_shipment_id, source_system, static_qr_hash')
+      .eq('id', packageId)
+      .single()
+
+    if (pkgErr || !pkg) {
+      return errorResponse(404, 'Package not found')
+    }
+
+    // Validar según el tipo de package
+    if (qrType === 'delivery' || pkg.type === 'delivery') {
+      // Para deliveries: el package debe estar en 'in_location'
+      if (pkg.status === 'picked_up') {
+        return errorResponse(409, 'Package has already been picked up')
+      }
+      if (pkg.status !== 'in_location') {
+        return errorResponse(409, `Package cannot be picked up. Status: ${pkg.status}`)
+      }
+    } else if (qrType === 'return' || pkg.type === 'return') {
+      // Para returns: el package debe estar en 'pending_dropoff'
+      if (pkg.status === 'in_location') {
+        return errorResponse(409, 'Return package already received at location')
+      }
+      if (pkg.status === 'returned') {
+        return errorResponse(409, 'Return package already completed')
+      }
+      if (pkg.status !== 'pending_dropoff') {
+        return errorResponse(409, `Return package cannot be received. Status: ${pkg.status}`)
+      }
+    } else {
+      return errorResponse(400, `Unknown package type: ${pkg.type}`)
+    }
+
+    // 5. Verificar que el local del QR pertenece al owner autenticado
+    const { data: location, error: locErr } = await supabaseAdmin
+      .from('locations')
+      .select('id, owner_id, name')
+      .eq('id', locationId)
+      .single()
+
+    if (locErr || !location) {
+      return errorResponse(404, 'Location not found')
+    }
+
+    if (location.owner_id !== ownerUser.id) {
+      return errorResponse(403, 'This package does not belong to your location')
+    }
+
+    // Doble check: el location del paquete coincide con el del QR
+    if (pkg.location_id !== locationId) {
+      return errorResponse(403, 'QR location mismatch')
+    }
+
+    // 6. Actualizar estado según el tipo de package
+    const timestamp = new Date().toISOString()
+    let newStatus: string
+    let eventType: string
+
+    if (pkg.type === 'delivery') {
+      newStatus = 'picked_up'
+      eventType = 'delivery_completed'
+      
+      // Limpiar QR dinámico
+      const { error: updateErr } = await supabaseAdmin
+        .from('packages')
+        .update({
+          status:          newStatus,
+          dynamic_qr_hash: null,
+          qr_expires_at:   null,
+          updated_at:      timestamp,
+        })
+        .eq('id', packageId)
+
+      if (updateErr) {
+        console.error('DB update error:', updateErr)
+        return errorResponse(500, 'Failed to update package status')
+      }
+    } else if (pkg.type === 'return') {
+      newStatus = 'in_location'
+      eventType = 'return_received'
+      
+      // Limpiar QR estático
+      const { error: updateErr } = await supabaseAdmin
+        .from('packages')
+        .update({
+          status:         newStatus,
+          static_qr_hash: null,
+          updated_at:     timestamp,
+        })
+        .eq('id', packageId)
+
+      if (updateErr) {
+        console.error('DB update error:', updateErr)
+        return errorResponse(500, 'Failed to update package status')
+      }
+    } else {
+      return errorResponse(400, 'Invalid package type')
+    }
+
+    // 7. Si es de un sistema externo, notificar (opcional - para futuras integraciones)
+    if (pkg.source_system === 'brickshare' && pkg.external_shipment_id) {
+      // TODO: Implementar webhook a Brickshare si se requiere notificación en tiempo real
+      // Por ahora, Brickshare consultará el estado de la BD directamente
+      console.log(`Package ${packageId} from Brickshare shipment ${pkg.external_shipment_id} - Event: ${eventType}`)
+    }
+
+    // 8. Éxito — devolver confirmación para la impresión del recibo
+    return new Response(
+      JSON.stringify({
+        success:       true,
+        package_id:    packageId,
+        package_type:  pkg.type,
+        tracking_code: pkg.tracking_code,
+        location_name: location.name,
+        event_type:    eventType,
+        new_status:    newStatus,
+        timestamp:     timestamp,
+        external_shipment_id: pkg.external_shipment_id,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
+  } catch (err) {
+    console.error('Unexpected error:', err)
+    return errorResponse(500, 'Internal server error')
+  }
+})
+
+function errorResponse(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    },
+  )
+}

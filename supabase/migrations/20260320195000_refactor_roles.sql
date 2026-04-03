@@ -45,10 +45,6 @@ END;
 $$;
 
 -- 5. Actualizar políticas RLS que referencien roles antiguos
+-- Nota: owner_id fue eliminado en la migración 013, así que no se puede usar aquí
+-- Las políticas de locations ya están actualizadas en migraciones posteriores
 DROP POLICY IF EXISTS "locations_owner_insert" ON public.locations;
-CREATE POLICY "locations_owner_insert"
-  ON public.locations FOR INSERT
-  WITH CHECK (
-    owner_id = auth.uid()
-    AND (public.my_role() IN ('usuarios', 'admin'))
-  );

@@ -24,8 +24,6 @@ export default function LoginScreen() {
       if (error) {
         logger.error('❌ [LoginScreen] Auth failed', { message: error.message }, 'LoginScreen');
         Alert.alert('Error de Autenticación', error.message);
-      } else {
-        Alert.alert('Éxito', 'Sesión iniciada correctamente');
       }
     } catch (err: any) {
       logger.error('❌ [LoginScreen] Login error', err, 'LoginScreen');

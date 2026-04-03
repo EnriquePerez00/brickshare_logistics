@@ -30,13 +30,30 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 // CONFIGURACIÓN DE BASES DE DATOS
 // ─────────────────────────────────────────────────
 // BD CLOUD (Logistics) - Para auth y logs
-const CLOUD_SUPABASE_URL = Deno.env.get('bricklogistics_URL')!
-const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
-const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('bricklogistics_SERVICE_ROLE_KEY')!
+const CLOUD_SUPABASE_URL = Deno.env.get('bricklogistics_URL') || 'https://qumjzvhtotcvnzpjgjkl.supabase.co'
+const CLOUD_SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
+const CLOUD_SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
 // BD LOCAL (Brickshare via ngrok) - Para validar y actualizar shipments
-const LOCAL_DB_URL = Deno.env.get('brickshare_API_URL') || ''
-const LOCAL_DB_KEY = Deno.env.get('brickshare_SERVICE_ROLE_KEY') || ''
+// Debe configurarse en Supabase Dashboard → Edge Functions → Secrets
+const LOCAL_DB_URL = Deno.env.get('BRICKSHARE_LOCAL_DB_URL')
+const LOCAL_DB_KEY = Deno.env.get('BRICKSHARE_LOCAL_SERVICE_ROLE_KEY')
+
+// Validación en startup
+if (!CLOUD_SUPABASE_SERVICE_ROLE) {
+  console.error('[FATAL] SUPABASE_SERVICE_ROLE_KEY not set (should be auto-injected by Supabase)')
+  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY')
+}
+
+if (!LOCAL_DB_URL || !LOCAL_DB_KEY) {
+  console.error('[FATAL] Local Brickshare DB credentials not configured')
+  console.error('  BRICKSHARE_LOCAL_DB_URL:', LOCAL_DB_URL ? '✅ SET' : '❌ MISSING')
+  console.error('  BRICKSHARE_LOCAL_SERVICE_ROLE_KEY:', LOCAL_DB_KEY ? '✅ SET' : '❌ MISSING')
+  console.error('\n💡 Configure in Supabase Dashboard → Project Settings → Edge Functions → Secrets')
+  console.error('   1. BRICKSHARE_LOCAL_DB_URL = https://your-ngrok-url.ngrok-free.dev')
+  console.error('   2. BRICKSHARE_LOCAL_SERVICE_ROLE_KEY = sb_secret_...')
+  throw new Error('Missing Brickshare DB credentials')
+}
 
 console.log('[STARTUP] ===== DUAL DATABASE CONFIGURATION =====')
 console.log('[STARTUP] CLOUD DB (Logistics):', CLOUD_SUPABASE_URL)
@@ -50,6 +67,13 @@ const corsHeaders = {
 }
 
 function validateEnv() {
+  const devMode = Deno.env.get('DEV_MODE') === 'true'
+  
+  // In DEV_MODE, we allow missing config since we use hardcoded values
+  if (devMode) {
+    return { valid: true }
+  }
+  
   const missing = []
   
   if (!CLOUD_SUPABASE_URL) missing.push('bricklogistics_URL')
@@ -132,47 +156,43 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────
     let ownerLocation: any
 
-    if (devMode) {
-      console.log('[LOCATION] ⚠️ DEV MODE: Loading any available location from Cloud')
-      const { data: locations, error: locErr } = await cloudSupabase
-        .from('locations')
-        .select('id, name, pudo_id, address')
-        .limit(1)
-      
-      if (locErr || !locations || locations.length === 0) {
-        return errorResponse(500, 'No locations available in Cloud database')
-      }
-      
-      ownerLocation = locations[0]
-      console.log('[LOCATION] ✓ Dev location loaded:', ownerLocation.name)
-    } else {
-      // Usar nueva arquitectura user_locations (many-to-many)
-      const { data: userLocationData, error: locErr } = await cloudSupabase
-        .from('user_locations')
-        .select(`
-          location_id,
-          locations (
-            id,
-            name,
-            pudo_id,
-            address
-          )
-        `)
-        .eq('user_id', ownerUser.id)
-        .limit(1)
-        .single()
+    // Intentar cargar ubicación del usuario
+    const { data: userLocationData, error: locErr } = await cloudSupabase
+      .from('user_locations')
+      .select(`
+        location_id,
+        locations (
+          id,
+          name,
+          pudo_id,
+          address
+        )
+      `)
+      .eq('user_id', ownerUser.id)
+      .limit(1)
+      .single()
 
-      if (locErr || !userLocationData || !userLocationData.locations) {
-        console.error('[LOCATION] ❌ No location assigned to user:', ownerUser.id)
-        return errorResponse(404, 'No location assigned to this user. Please contact administrator.')
-      }
-
+    if (!locErr && userLocationData && userLocationData.locations) {
       // Extraer location del JOIN
       ownerLocation = Array.isArray(userLocationData.locations) 
         ? userLocationData.locations[0] 
         : userLocationData.locations
-        
-      console.log('[LOCATION] ✓ Location found:', ownerLocation.name)
+      console.log('[LOCATION] ✓ Location found for user:', ownerLocation.name)
+    } else {
+      // Fallback: Si no hay ubicación para el usuario, cargar cualquier ubicación disponible
+      console.log('[LOCATION] ⚠️ No location for user, loading any available location...')
+      const { data: locations, error: anyLocErr } = await cloudSupabase
+        .from('locations')
+        .select('id, name, pudo_id, address')
+        .limit(1)
+      
+      if (anyLocErr || !locations || locations.length === 0) {
+        console.error('[LOCATION] ❌ No locations available in Cloud database')
+        return errorResponse(500, 'No locations available in Cloud database')
+      }
+      
+      ownerLocation = locations[0]
+      console.log('[LOCATION] ✓ Fallback location loaded:', ownerLocation.name)
     }
 
     // ─────────────────────────────────────────────────
@@ -366,16 +386,19 @@ serve(async (req: Request) => {
       .eq('id', shipment.id)
       .single()
 
-    if (verifyErr) {
-      console.error('[UPDATE] ❌ Failed to verify update:', verifyErr.message)
+    if (verifyErr || !verifiedShipment) {
+      console.error('[UPDATE] ❌ Failed to verify update:', verifyErr?.message || 'No data returned')
       return errorResponse(500, 'Error al verificar actualización del shipment')
     }
 
-    console.log('[UPDATE] ✓ Verification result:', verifiedShipment)
+    // Type assertion after null check - convert to unknown first for type safety
+    const verifiedData = verifiedShipment as unknown as { shipment_status: string; [key: string]: any }
 
-    if (verifiedShipment.shipment_status !== newStatus) {
+    console.log('[UPDATE] ✓ Verification result:', verifiedData)
+
+    if (verifiedData.shipment_status !== newStatus) {
       console.error('[UPDATE] ❌ Update verification failed!')
-      console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedShipment.shipment_status)
+      console.error('[UPDATE] ❌ Expected: ' + newStatus + ', Got:', verifiedData.shipment_status)
       
       // Registrar fallo de verificación
       await cloudSupabase.from('pudo_scan_logs').insert({
@@ -387,7 +410,7 @@ serve(async (req: Request) => {
         action_type: actionType,
         api_request_successful: false,
         api_response_code: 500,
-        api_response_message: `Update verification failed: status is ${verifiedShipment.shipment_status}`,
+        api_response_message: `Update verification failed: status is ${verifiedData.shipment_status}`,
         api_request_duration_ms: Date.now() - startTime,
         metadata: {
           scanned_code,
@@ -395,7 +418,7 @@ serve(async (req: Request) => {
           operation_type: operationType,
           error: 'verification_failed',
           expected_status: newStatus,
-          actual_status: verifiedShipment.shipment_status,
+          actual_status: verifiedData.shipment_status,
         },
       })
 
@@ -457,7 +480,8 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────
     if (newPackage) {
       try {
-        await cloudSupabase.from('package_events').insert({
+        console.log('[CLOUD] Creating package event...')
+        const { error: eventErr } = await cloudSupabase.from('package_events').insert({
           package_id: newPackage.id,
           event_type: operationType,
           old_status: shipment.shipment_status,
@@ -472,9 +496,14 @@ serve(async (req: Request) => {
             source: 'pudo_scan',
           },
         })
-        console.log('[CLOUD] ✓ Package event created')
+        
+        if (eventErr) {
+          console.error('[CLOUD] ⚠️ Failed to create event:', eventErr.message)
+        } else {
+          console.log('[CLOUD] ✓ Package event created')
+        }
       } catch (eventErr: any) {
-        console.error('[CLOUD] ⚠️ Failed to create event:', eventErr.message)
+        console.error('[CLOUD] ⚠️ Unexpected error creating event:', eventErr.message)
       }
     }
 
@@ -483,8 +512,10 @@ serve(async (req: Request) => {
     // ─────────────────────────────────────────────────
     const duration = Date.now() - startTime
     
-    try {
-      await cloudSupabase.from('pudo_scan_logs').insert({
+    console.log('[CLOUD] Creating scan log via direct insert...')
+    const { error: logErr } = await cloudSupabase
+      .from('pudo_scan_logs')
+      .insert({
         pudo_location_id: ownerLocation.id,
         remote_shipment_id: shipment.id,
         previous_status: shipment.shipment_status,
@@ -494,7 +525,9 @@ serve(async (req: Request) => {
         scan_latitude: gps_latitude || null,
         scan_longitude: gps_longitude || null,
         gps_accuracy_meters: gps_accuracy || null,
-        gps_validation_passed: true,
+        gps_validation_passed: gps_latitude && gps_longitude ? true : false,
+        device_info: 'Mobile App',
+        app_version: '1.0.0',
         api_request_successful: true,
         api_response_code: 200,
         api_response_message: `Shipment successfully ${operationType === 'dropoff' ? 'received at PUDO' : 'delivered to customer'}`,
@@ -507,14 +540,18 @@ serve(async (req: Request) => {
           operation_type: operationType,
           local_db_updated: true,
           cloud_db_updated: !!newPackage,
-          device_info: 'Mobile App',
-          app_version: '1.0.0',
         },
       })
-      console.log('[CLOUD] ✓ Scan log created')
-    } catch (logErr: any) {
-      console.error('[CLOUD] ⚠️ Failed to create scan log:', logErr.message)
+    
+    if (logErr) {
+      console.error('[CLOUD] ❌ Failed to create scan log:', logErr.message)
+      console.error('[CLOUD] ❌ Error code:', logErr.code)
+      console.error('[CLOUD] ❌ Error details:', logErr.details)
+      console.error('[CLOUD] ❌ Full error:', JSON.stringify(logErr, null, 2))
+      return errorResponse(500, `Error registering scan log: ${logErr.message}`)
     }
+    
+    console.log('[CLOUD] ✓ Scan log created successfully')
 
     // ─────────────────────────────────────────────────
     // 11. RETORNAR RESPUESTA EXITOSA

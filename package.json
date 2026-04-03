@@ -14,6 +14,7 @@
     "dev:mobile": "cd apps/mobile && expo start",
     "dev:mobile:ios": "cd apps/mobile && expo run:ios",
     "dev:mobile:android": "cd apps/mobile && expo run:android",
+    "dev:tunnel": "node scripts/start-with-ngrok.mjs",
     "build": "turbo run build",
     "build:web": "turbo run build --filter=web",
     "build:mobile:ios": "cd apps/mobile && eas build --platform ios --profile preview",
@@ -27,7 +28,9 @@
     "clean": "turbo run clean",
     "clean:all": "rm -rf node_modules apps/*/node_modules packages/*/node_modules",
     "db:push": "supabase db push",
-    "db:watch": "npx nodemon --watch supabase/migrations --ext sql --exec \"npm run db:push\""
+    "db:watch": "npx nodemon --watch supabase/migrations --ext sql --exec \"npm run db:push\"",
+    "tunnel:check": "node scripts/check-ngrok-status.mjs",
+    "tunnel:stop": "pkill -f ngrok || true"
   },
   "devDependencies": {
     "nodemon": "^3.1.4",
