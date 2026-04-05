@@ -198,20 +198,19 @@ export function AdminShipmentsTable() {
                 <TableHead>Estado</TableHead>
                 <TableHead>Establecimiento</TableHead>
                 <TableHead>Ciudad</TableHead>
-                <TableHead>Usuario</TableHead>
                 <TableHead className="text-right">Fecha</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-zinc-400">
+                  <TableCell colSpan={5} className="text-center py-8 text-zinc-400">
                     Cargando envíos...
                   </TableCell>
                 </TableRow>
               ) : packages.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-zinc-400">
+                  <TableCell colSpan={5} className="text-center py-8 text-zinc-400">
                     No hay envíos que coincidan con los filtros.
                   </TableCell>
                 </TableRow>
@@ -226,11 +225,6 @@ export function AdminShipmentsTable() {
                     </TableCell>
                     <TableCell className="text-zinc-700">{(pkg.location as any)?.name || '—'}</TableCell>
                     <TableCell className="text-zinc-500">{(pkg.location as any)?.city || '—'}</TableCell>
-                    <TableCell className="text-zinc-500 text-sm">
-                      {(pkg.customer as any)
-                        ? `${(pkg.customer as any).first_name || ''} ${(pkg.customer as any).last_name || ''}`.trim() || (pkg.customer as any).email
-                        : <span className="italic text-zinc-300">Sin asignar</span>}
-                    </TableCell>
                     <TableCell className="text-right text-xs text-zinc-400">
                       {new Date(pkg.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                     </TableCell>

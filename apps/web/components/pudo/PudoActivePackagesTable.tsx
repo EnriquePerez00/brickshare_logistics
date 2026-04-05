@@ -29,17 +29,21 @@ export default function PudoActivePackagesTable({ locationId, onRefresh }: PudoA
   const [packages, setPackages] = useState<ActivePackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'delivery' | 'return'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'in_location' | 'returned'>('all');
   const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
     loadPackages();
-  }, [locationId]);
+  }, [locationId, statusFilter]);
 
   async function loadPackages() {
     setLoading(true);
     try {
-      const response = await fetch(`/api/pudo/active-packages?location_id=${locationId}`);
+      let url = `/api/pudo/active-packages?location_id=${locationId}`;
+      if (statusFilter !== 'all') {
+        url += `&status=${statusFilter}`;
+      }
+      const response = await fetch(url);
       if (!response.ok) throw new Error('Error loading packages');
       
       const result = await response.json();
@@ -68,7 +72,6 @@ export default function PudoActivePackagesTable({ locationId, onRefresh }: PudoA
 
   const filteredPackages = packages
     .filter(pkg => {
-      if (typeFilter !== 'all' && pkg.package_type !== typeFilter) return false;
       if (searchTerm && !pkg.tracking_code.toLowerCase().includes(searchTerm.toLowerCase())) return false;
       return true;
     });
@@ -96,25 +99,25 @@ export default function PudoActivePackagesTable({ locationId, onRefresh }: PudoA
         
         <div className="flex gap-2">
           <Button
-            variant={typeFilter === 'all' ? 'default' : 'outline'}
+            variant={statusFilter === 'all' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setTypeFilter('all')}
+            onClick={() => setStatusFilter('all')}
           >
             <Package className="h-4 w-4 mr-2" />
             Todos
           </Button>
           <Button
-            variant={typeFilter === 'delivery' ? 'default' : 'outline'}
+            variant={statusFilter === 'in_location' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setTypeFilter('delivery')}
+            onClick={() => setStatusFilter('in_location')}
           >
             <TruckIcon className="h-4 w-4 mr-2" />
             Entregas
           </Button>
           <Button
-            variant={typeFilter === 'return' ? 'default' : 'outline'}
+            variant={statusFilter === 'returned' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setTypeFilter('return')}
+            onClick={() => setStatusFilter('returned')}
           >
             <RotateCcw className="h-4 w-4 mr-2" />
             Devoluciones
@@ -137,7 +140,6 @@ export default function PudoActivePackagesTable({ locationId, onRefresh }: PudoA
                 <TableRow>
                   <TableHead className="w-12">#</TableHead>
                   <TableHead>Tracking Code</TableHead>
-                  <TableHead>Cliente</TableHead>
                   <TableHead>Tipo</TableHead>
                   <TableHead>Estado</TableHead>
                   <TableHead>Tiempo en local</TableHead>
@@ -155,7 +157,6 @@ export default function PudoActivePackagesTable({ locationId, onRefresh }: PudoA
                       <TableCell className="font-mono font-semibold">
                         {pkg.tracking_code}
                       </TableCell>
-                      <TableCell>{pkg.customer_name}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           {pkg.package_type === 'delivery' ? (

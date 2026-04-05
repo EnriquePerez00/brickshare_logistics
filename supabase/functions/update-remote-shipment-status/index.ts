@@ -135,22 +135,7 @@ serve(async (req: Request) => {
 
       if (!gpsValidationPassed) {
         gpsValidationMessage = `GPS validation failed: distance ${distance.toFixed(0)}m exceeds allowed radius ${allowedRadius}m`
-        // Registrar log de validación GPS fallida
-        await logPudoScan(
-          ownerLocation.id,
-          shipment_id,
-          'unknown',
-          'unknown',
-          'delivery_confirmation',
-          ownerUser.id,
-          gps_latitude,
-          gps_longitude,
-          gps_accuracy,
-          false,
-          400,
-          gpsValidationMessage,
-          0
-        )
+        // REMOVED: logPudoScan call (pudo_scan_logs eliminada en migration 022)
         return errorResponse(403, gpsValidationMessage)
       }
 
@@ -167,21 +152,7 @@ serve(async (req: Request) => {
       .single()
 
     if (shipmentErr || !shipment) {
-      await logPudoScan(
-        ownerLocation.id,
-        shipment_id,
-        'unknown',
-        'unknown',
-        'delivery_confirmation',
-        ownerUser.id,
-        gps_latitude,
-        gps_longitude,
-        gps_accuracy,
-        false,
-        404,
-        'Shipment not found in remote database',
-        Date.now() - startTime
-      )
+      // REMOVED: logPudoScan call (pudo_scan_logs eliminada en migration 022)
       return errorResponse(404, 'Shipment not found in remote database')
     }
 
@@ -199,21 +170,7 @@ serve(async (req: Request) => {
       actionType = 'return_confirmation'
     } else {
       // Estado no válido para operación PUDO
-      await logPudoScan(
-        ownerLocation.id,
-        shipment_id,
-        currentStatus,
-        currentStatus,
-        actionType,
-        ownerUser.id,
-        gps_latitude,
-        gps_longitude,
-        gps_accuracy,
-        false,
-        409,
-        `Invalid status for PUDO operation: ${currentStatus}`,
-        Date.now() - startTime
-      )
+      // REMOVED: logPudoScan call (pudo_scan_logs eliminada en migration 022)
       return errorResponse(
         409,
         `Invalid status for PUDO operation: ${currentStatus}. Expected in_transit_pudo or in_return_pudo.`
@@ -231,41 +188,13 @@ serve(async (req: Request) => {
 
     if (updateErr) {
       console.error('Remote DB update error:', updateErr)
-      await logPudoScan(
-        ownerLocation.id,
-        shipment_id,
-        currentStatus,
-        newStatus,
-        actionType,
-        ownerUser.id,
-        gps_latitude,
-        gps_longitude,
-        gps_accuracy,
-        false,
-        500,
-        `Failed to update remote database: ${updateErr.message}`,
-        Date.now() - startTime
-      )
+      // REMOVED: logPudoScan call (pudo_scan_logs eliminada en migration 022)
       return errorResponse(500, 'Failed to update shipment status in remote database')
     }
 
-    // 7. Registrar log exitoso en tabla pudo_scan_logs
+    // 7. REMOVED: pudo_scan_logs registration (tabla eliminada en migration 022)
     const duration = Date.now() - startTime
-    await logPudoScan(
-      ownerLocation.id,
-      shipment_id,
-      currentStatus,
-      newStatus,
-      actionType,
-      ownerUser.id,
-      gps_latitude,
-      gps_longitude,
-      gps_accuracy,
-      true,
-      200,
-      'Status updated successfully',
-      duration
-    )
+    console.log('[INFO] Scan logging skipped (pudo_scan_logs removed)')
 
     // 8. Retornar confirmación
     return new Response(
@@ -350,50 +279,7 @@ function hashString(str: string): string {
 }
 
 /**
- * Registra un escaneo en la tabla pudo_scan_logs usando admin client
+ * REMOVED: logPudoScan function
+ * La tabla pudo_scan_logs fue eliminada en migration 022
+ * Los logs ahora se registran solo en package_events
  */
-async function logPudoScan(
-  locationId: string,
-  shipmentId: string,
-  previousStatus: string,
-  newStatus: string,
-  actionType: 'delivery_confirmation' | 'return_confirmation',
-  userId: string,
-  latitude: number | null,
-  longitude: number | null,
-  accuracy: number | null,
-  success: boolean,
-  responseCode: number,
-  responseMessage: string,
-  durationMs: number
-): Promise<void> {
-  try {
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_bricklogistics_URL')!,
-      Deno.env.get('SUPABASE_bricklogistics_SERVICE_ROLE_KEY')!
-    )
-
-    await supabaseAdmin.from('pudo_scan_logs').insert({
-      pudo_location_id: locationId,
-      remote_shipment_id: shipmentId,
-      previous_status: previousStatus,
-      new_status: newStatus,
-      scanned_by_user_id: userId,
-      action_type: actionType,
-      scan_latitude: latitude,
-      scan_longitude: longitude,
-      gps_accuracy_meters: accuracy,
-      gps_validation_passed: latitude !== null && longitude !== null,
-      api_request_successful: success,
-      api_response_code: responseCode,
-      api_response_message: responseMessage,
-      api_request_duration_ms: durationMs,
-      metadata: {
-        device_info: 'Mobile App',
-        app_version: '1.0.0',
-      }
-    })
-  } catch (err) {
-    console.error('Failed to log PUDO scan:', err)
-  }
-}

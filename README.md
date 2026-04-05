@@ -1,6 +1,57 @@
 # Brickshare Logistics
 
-Plataforma de gestión de logística para puntos PUDO (Pick Up Drop Off) con sincronización en tiempo real.
+Plataforma de gestión de logística para puntos PUDO (Pick Up Drop Off) con arquitectura dual database.
+
+## 🏗️ Arquitectura Dual Database
+
+Este proyecto utiliza **dos bases de datos Supabase** con roles específicos:
+
+### **DB1 (Brickshare_logistics)** - Cloud Supabase
+- 🌐 **URL:** `https://qumjzvhtotcvnzpjgjkl.supabase.co`
+- 🔐 **Función:** Autenticación de usuarios + Registro de logs
+- 📦 **Contiene:**
+  - `auth.users` - Usuarios y autenticación
+  - `user_locations` - Asignación de operadores a ubicaciones PUDO
+  - `packages` - Registro de paquetes procesados
+  - `package_events` - Historial de eventos y auditoría de operaciones
+- 🚀 **Edge Functions:** Desplegadas aquí (`process-pudo-scan`)
+
+### **DB2 (Brickshare)** - Local Database vía ngrok
+- 🏠 **URL:** `https://semblably-dizzied-bruno.ngrok-free.dev` (túnel ngrok)
+- 📦 **Función:** Gestión de envíos y operaciones de negocio
+- 📊 **Contiene:**
+  - `shipments` - Envíos principales con QR codes
+  - `users` - Clientes finales
+  - Datos de negocio core de Brickshare
+
+### 🔄 Flujo de Operación
+
+```
+┌─────────────────┐
+│   App Móvil     │ 1. Autentica con DB1
+│   (Operador)    │ 2. Escanea QR code
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   DB1 (Cloud)   │ 3. Edge Function recibe request
+│  Edge Function  │ 4. Valida operador y ubicación
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   DB2 (Local)   │ 5. Busca y actualiza shipment
+│   via ngrok     │ 6. Cambia estado del envío
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   DB1 (Cloud)   │ 7. Registra log de operación
+│   Audit Logs    │ 8. Retorna resultado a app
+└─────────────────┘
+```
+
+**⚠️ Importante:** El túnel ngrok debe estar activo para que las Edge Functions puedan acceder a DB2 local.
 
 ## Configuración Rápida
 
@@ -106,11 +157,35 @@ Para testear decodificación de códigos de barras desde imágenes:
 
 ## Base de Datos
 
+### DB1 (Brickshare_logistics) - Cloud
 **Proyecto Supabase:** `qumjzvhtotcvnzpjgjkl`
 
 **Conexión remota:**
 ```
 URL: https://qumjzvhtotcvnzpjgjkl.supabase.co
+ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### DB2 (Brickshare) - Local vía ngrok
+
+**Túnel ngrok:**
+```bash
+# Iniciar túnel (desde máquina con DB2 local)
+ngrok http 54321
+
+# URL generada (ejemplo):
+https://semblably-dizzied-bruno.ngrok-free.dev
+```
+
+**Configurar en apps/mobile/.env.local:**
+```bash
+# DB1 - Cloud (Authentication + Logs)
+EXPO_PUBLIC_SUPABASE_URL=https://qumjzvhtotcvnzpjgjkl.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# DB2 - Local (Shipments via ngrok)
+EXPO_PUBLIC_LOCAL_SUPABASE_URL=https://semblably-dizzied-bruno.ngrok-free.dev
+EXPO_PUBLIC_LOCAL_SUPABASE_ANON_KEY=sb_secret_...
 ```
 
 ### Migraciones
@@ -122,6 +197,42 @@ npx supabase db push
 ```
 
 ## Troubleshooting
+
+### Error "Edge Function returned a non-2xx status code"
+
+**Síntoma:** La app móvil muestra error al escanear QR codes
+
+**Causas posibles:**
+1. **Túnel ngrok caído/expirado**
+   ```bash
+   # Verificar estado
+   curl https://semblably-dizzied-bruno.ngrok-free.dev/health
+   
+   # Si falla, reiniciar ngrok
+   ngrok http 54321
+   ```
+
+2. **URL de ngrok desactualizada**
+   - ngrok genera nueva URL cada vez que se reinicia (plan free)
+   - Actualizar `EXPO_PUBLIC_LOCAL_SUPABASE_URL` en `apps/mobile/.env.local`
+   - Reiniciar app móvil para cargar nuevo valor
+
+3. **DB2 local no accesible**
+   - Verificar que Supabase local esté corriendo
+   - Puerto 54321 debe estar abierto
+
+**Solución rápida:**
+```bash
+# 1. Relanzar ngrok
+ngrok http 54321
+
+# 2. Copiar nueva URL y actualizar apps/mobile/.env.local
+# EXPO_PUBLIC_LOCAL_SUPABASE_URL=https://nueva-url.ngrok-free.dev
+
+# 3. Reiniciar app móvil
+cd apps/mobile
+npx expo run:android
+```
 
 ### 403 Forbidden en Edge Function
 

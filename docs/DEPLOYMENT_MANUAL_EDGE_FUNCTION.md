@@ -275,7 +275,7 @@ const REMOTE_DB_KEY = Deno.env.get('REMOTE_DB_SERVICE_KEY') || Deno.env.get('BRI
 
 ## 🔐 Credenciales de Referencia
 
-**Database Password (DB1 Cloud)**: `Urgell170175!`
+**Database Password (DB1 Cloud)**: `YOUR_DB_PASSWORD`
 
 **Test User**:
 - Email: `user@brickshare.eu`

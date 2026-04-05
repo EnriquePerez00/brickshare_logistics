@@ -8,11 +8,6 @@
     "userInterfaceStyle": "dark",
     "scheme": "pudobrickshare",
     "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#09090b"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.brickshare.pudo",

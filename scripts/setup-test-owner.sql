@@ -98,7 +98,7 @@ FROM pg_policies
 WHERE table_name = 'packages'
 ORDER BY policyname;
 
-SELECT 'STEP 6: RLS Policies en pudo_scan_logs' AS step;
+SELECT 'STEP 6: RLS Policies en package_events' AS step;
 SELECT 
   table_name,
   policyname,
@@ -107,8 +107,10 @@ SELECT
   qual,
   check_qual
 FROM pg_policies
-WHERE table_name = 'pudo_scan_logs'
+WHERE table_name = 'package_events'
 ORDER BY policyname;
+
+-- NOTA: pudo_scan_logs fue eliminada en migration 022
 
 -- ─────────────────────────────────────────────────────────────
 -- 6. VERIFICAR QUE TABLAS EXISTEN
@@ -116,14 +118,14 @@ ORDER BY policyname;
 SELECT 'STEP 7: Tablas críticas' AS step;
 SELECT table_name FROM information_schema.tables 
 WHERE table_schema = 'public' 
-  AND table_name IN ('users', 'locations', 'packages', 'pudo_scan_logs')
+  AND table_name IN ('users', 'locations', 'packages', 'package_events')
 ORDER BY table_name;
 
 -- ─────────────────────────────────────────────────────────────
 -- 7. LIMPIAR DATOS DE PRUEBA PREVIOS (OPCIONAL)
 -- ─────────────────────────────────────────────────────────────
 -- Descomenta si quieres limpiar pruebas anteriores
--- DELETE FROM public.pudo_scan_logs;
+-- DELETE FROM public.package_events;
 -- DELETE FROM public.packages;
 
 -- ─────────────────────────────────────────────────────────────
@@ -136,6 +138,6 @@ SELECT
 FROM public.packages
 UNION ALL
 SELECT 
-  'pudo_scan_logs' as table_name,
+  'package_events' as table_name,
   COUNT(*) as row_count
-FROM public.pudo_scan_logs;
+FROM public.package_events;

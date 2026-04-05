@@ -68,17 +68,19 @@ WHERE u.role = 'owner'
 ORDER BY l.created_at DESC
 LIMIT 1;
 
--- PASO 6: Verificar estado de packages y pudo_scan_logs
+-- PASO 6: Verificar estado de packages y package_events
 SELECT 'STEP 6: Estado de Tablas' AS step;
-SELECT 
+SELECT
   'packages' as table_name,
   COUNT(*) as row_count
 FROM public.packages
 UNION ALL
-SELECT 
-  'pudo_scan_logs' as table_name,
+SELECT
+  'package_events' as table_name,
   COUNT(*) as row_count
-FROM public.pudo_scan_logs;
+FROM public.package_events;
+
+-- NOTA: pudo_scan_logs fue eliminada en migration 022
 
 -- PASO 7: Mostrar confirmación
 SELECT 'STEP 7: SETUP COMPLETADO ✅' AS result;

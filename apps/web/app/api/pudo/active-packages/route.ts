@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get('location_id');
+  const statusFilter = searchParams.get('status'); // 'in_location', 'returned', or null for all
   const sort = searchParams.get('sort') || 'time';
   const order = searchParams.get('order') || 'desc';
   
@@ -42,8 +43,12 @@ export async function GET(request: Request) {
         last_name
       )
     `)
-    .eq('location_id', locationId)
-    .eq('status', 'in_location');
+    .eq('location_id', locationId);
+  
+  // Aplicar filtro de status solo si se proporciona
+  if (statusFilter) {
+    query = query.eq('status', statusFilter);
+  }
   
   const { data: rawData, error } = await query;
   
